@@ -1,0 +1,19 @@
+# Secrets
+.env
+
+# Live configuration with real phone numbers - stays on the server, not in git.
+# (The *.example.* files ARE committed.)
+config/zaria-setup.xlsx
+config/settings.json
+config/regular-clients.json
+config/contacts.json
+
+# Runtime state and logs written by the agent
+data/
+*.log
+
+# Dependencies and noise
+node_modules/
+.DS_Store
+*.swp
+~$*.xlsx

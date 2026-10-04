@@ -1,0 +1,20 @@
+# systemd service: keeps the agent running 24/7 and starts it after a reboot.
+# Install it with the command in README > "Run it 24/7" (it fills in the
+# __USER__, __DIR__ and __NODE__ placeholders for you).
+
+[Unit]
+Description=Zaria Court booking agent (Ticqet -> WhatsApp/SMS alerts)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=__NODE__ src/index.js
+Restart=always
+RestartSec=10
+# Logs: journalctl -u zaria-agent -f   (and data/agent.log)
+
+[Install]
+WantedBy=multi-user.target

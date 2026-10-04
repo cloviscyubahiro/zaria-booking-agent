@@ -1,0 +1,41 @@
+{
+  "timezone": "Africa/Kigali",
+  "venue": {
+    "name": "Zaria Court",
+    "ticqetVenueId": "mTNigTpKron5hpoNE2ws"
+  },
+  "court": {
+    "name": "Multi-Purpose Court",
+    "ticqetEventId": "wyUcHcKLSP52EBIr9asf"
+  },
+  "firebase": {
+    "projectId": "kigali-arena",
+    "authDomain": "kigali-arena.firebaseapp.com",
+    "apiKey": "AUTO"
+  },
+  "watch": {
+    "windowDays": 60,
+    "settleSeconds": 60,
+    "probeMinutes": 5
+  },
+  "channel": "preview",
+  "smsSenderName": "ZariaCourt",
+  "dailyUpdateTime": "06:30",
+  "weeklyOverviewDay": "Monday",
+  "weeklyOverviewTime": "06:30",
+  "attendantReminderMinutes": [
+    60,
+    15
+  ],
+  "quietHours": {
+    "start": "23:00",
+    "end": "06:00"
+  },
+  "technicalAlertAfterMinutes": 15,
+  "renewalReminderDaysBefore": 3,
+  "openSlotCheckDaysAhead": 7,
+  "maxAlertsAtOnce": 5,
+  "maxMessagesPerDay": 300,
+  "sendWelcome": true,
+  "adminName": "the admin"
+}

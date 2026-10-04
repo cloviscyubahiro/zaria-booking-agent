@@ -1,0 +1,74 @@
+[
+  {
+    "number": "0780000001",
+    "role": "Team",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": false,
+    "admin": false
+  },
+  {
+    "number": "0780000002",
+    "role": "Attendant",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": true,
+    "admin": false
+  },
+  {
+    "number": "0780000003",
+    "role": "Team",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": false,
+    "admin": false
+  },
+  {
+    "number": "0780000004",
+    "role": "Team",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": false,
+    "admin": false
+  },
+  {
+    "number": "0780000005",
+    "role": "Team",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": false,
+    "admin": false
+  },
+  {
+    "number": "0780000006",
+    "role": "Attendant",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": true,
+    "admin": false
+  },
+  {
+    "number": "0780000007",
+    "role": "Team",
+    "name": "",
+    "alerts": true,
+    "summaries": true,
+    "reminders": false,
+    "admin": false
+  },
+  {
+    "number": "0780000009",
+    "role": "Admin (Clovis)",
+    "name": "Clovis",
+    "alerts": false,
+    "summaries": false,
+    "reminders": false,
+    "admin": true
+  }
+]
