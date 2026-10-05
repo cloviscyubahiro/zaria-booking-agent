@@ -78,10 +78,12 @@ function clock12(hour24, withMeridiem) {
 
 // Format a booked range given start hour and (exclusive) end hour, both 24h ints.
 // e.g. (17, 19) -> "5:00-7:00 PM";  (11, 13) -> "11:00 AM-1:00 PM".
+// Midnight (24) is "AM" but never shares it: (7, 24) -> "7:00 AM-12:00 AM",
+// not "7:00-12:00 AM", which reads as a morning booking.
 export function formatRange(startHour, endHour) {
   const startMer = startHour < 12 ? 'AM' : 'PM';
   const endMer = endHour < 12 || endHour === 24 ? 'AM' : 'PM';
-  if (startMer === endMer) {
+  if (startMer === endMer && endHour !== 24) {
     return `${clock12(startHour, false)}-${clock12(endHour, true)}`;
   }
   return `${clock12(startHour, true)}-${clock12(endHour, true)}`;
@@ -136,6 +138,6 @@ export function compactRange(startHour, endHour) {
     const x = h % 12;
     return x === 0 ? 12 : x;
   };
-  if (mer(startHour) === mer(endHour)) return `${h12(startHour)}-${h12(endHour)}${mer(endHour)}`;
+  if (mer(startHour) === mer(endHour) && endHour !== 24) return `${h12(startHour)}-${h12(endHour)}${mer(endHour)}`;
   return `${h12(startHour)}${mer(startHour)}-${h12(endHour)}${mer(endHour)}`;
 }

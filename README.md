@@ -20,12 +20,12 @@ Regular clients (booked directly with Zaria) are never announced as new bookings
 ## Quick start (Ubuntu server)
 
 ```bash
-# 1. Node.js 22 (skip if `node -v` already shows v20 or newer)
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+# 1. Node.js 24 (skip if `node -v` already shows v22 or newer)
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# 2. The code
-git clone git@github.com:<your-github-user>/zaria-booking-agent.git
+# 2. The code (private repo: Git asks for your GitHub username, then a token as the password)
+git clone https://github.com/cloviscyubahiro/zaria-booking-agent.git
 cd zaria-booking-agent
 npm ci
 

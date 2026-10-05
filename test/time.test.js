@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ticqetLabel, weekdayOf, formatRange, dateWindow, clockLabel, shortDate, WEEKDAYS } from '../src/time.js';
+import { ticqetLabel, weekdayOf, formatRange, compactRange, dateWindow, clockLabel, shortDate, WEEKDAYS } from '../src/time.js';
 
 test('ticqetLabel zero-pads the day (the 1st-9th trap)', () => {
   assert.equal(ticqetLabel(2026, 10, 1), 'Thursday 01 October 2026');
@@ -19,6 +19,14 @@ test('formatRange shows meridiem once when both sides share it', () => {
   assert.equal(formatRange(10, 12), '10:00 AM-12:00 PM'); // crosses noon
   assert.equal(formatRange(11, 13), '11:00 AM-1:00 PM');
   assert.equal(formatRange(22, 24), '10:00 PM-12:00 AM'); // crosses midnight
+});
+
+test('a morning-to-midnight booking does not read as a morning one', () => {
+  // Real case: Sat 10 Oct 2026 was booked 7 AM to midnight.
+  assert.equal(formatRange(7, 24), '7:00 AM-12:00 AM');
+  assert.equal(compactRange(7, 24), '7AM-12AM');
+  assert.equal(compactRange(22, 24), '10PM-12AM');
+  assert.equal(compactRange(17, 19), '5-7PM');
 });
 
 test('dateWindow rolls across a month boundary', () => {
