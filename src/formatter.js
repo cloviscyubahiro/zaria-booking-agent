@@ -255,13 +255,29 @@ export function adminOvernight(lines) {
   return [`${HEAD}: Overnight checks`, ...lines].join('\n');
 }
 
+// The setup sheet has a mistake. The agent keeps the last good settings.
+export function configProblem(errors, maxLines = 5) {
+  return [
+    `${HEAD}: Settings problem`,
+    ...errors.slice(0, maxLines),
+    ...(errors.length > maxLines ? [`+${errors.length - maxLines} more.`] : []),
+    'Alerts continue with the last good settings until this is fixed in the sheet.',
+  ].join('\n');
+}
+
 // ---------- setup ----------
+
+// " on WhatsApp", " on SMS", " by email" - and nothing in preview.
+const via = (channelName) => {
+  if (channelName === 'email') return ' by email';
+  return channelName && channelName !== 'preview' ? ` on ${channelName}` : '';
+};
 
 // Sent once to everyone when the agent first goes live on a channel.
 export function welcome({ channelName, courtName, dailyTime, adminName }) {
   return [
     `${HEAD}: Booking alerts are on`,
-    `You will now get ${courtName} alerts on ${channelName}: new Ticqet bookings, a daily update at ${dailyTime}, and reminders for attendants.`,
+    `You will now get ${courtName} alerts${via(channelName)}: new Ticqet bookings, a daily update at ${dailyTime}, and reminders for attendants.`,
     `This is a trial. Tell ${adminName} if anything is wrong or missing.`,
   ].join('\n');
 }
@@ -270,7 +286,7 @@ export function welcome({ channelName, courtName, dailyTime, adminName }) {
 export function testMessage(channelName) {
   return [
     `${HEAD}: Test message`,
-    `If you can read this, the booking agent can reach you on ${channelName}.`,
+    `If you can read this, the booking agent can reach you${via(channelName)}.`,
   ].join('\n');
 }
 

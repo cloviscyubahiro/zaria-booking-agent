@@ -21,5 +21,8 @@ export function makeSender(settings, env = process.env) {
   if (channel === 'pindo') {
     return createPindoSender({ token: env.PINDO_TOKEN, senderName: settings.smsSenderName });
   }
+  if (channel === 'email') {
+    throw new Error('Email alerts are sent by the Google Apps Script version of the agent (README > "Email alerts, free"). Set Channel to preview, WhatsApp or SMS to run it here.');
+  }
   return createPreviewSender();
 }

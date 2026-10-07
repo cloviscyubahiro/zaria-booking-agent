@@ -8,7 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
-import { WEEKDAYS } from './time.js';
+import { WEEKDAYS, zoneSupported } from './time.js';
 
 // Every setting has a safe default, so an older settings.json never crashes the agent.
 export const DEFAULT_SETTINGS = {
@@ -20,8 +20,9 @@ export const DEFAULT_SETTINGS = {
   // change before alerting (absorbs Ticqet re-writing a record). probeMinutes:
   // how often to double-check the live connection against the server.
   watch: { windowDays: 60, settleSeconds: 60, probeMinutes: 5 },
-  channel: 'preview', // preview | whatsapp-cloud | pindo
+  channel: 'preview', // preview | whatsapp-cloud | pindo | email
   smsSenderName: 'ZariaCourt',
+  emailSenderName: 'Zaria Court Bookings',
   dailyUpdateTime: '06:30',
   weeklyOverviewDay: 'Monday',
   weeklyOverviewTime: '06:30',
@@ -42,16 +43,19 @@ const CHANNEL_ALIASES = {
   'whatsapp-cloud': 'whatsapp-cloud',
   sms: 'pindo',
   pindo: 'pindo',
+  email: 'email',
+  'e-mail': 'email',
+  gmail: 'email',
 };
 
 export function normalizeChannel(value) {
   const c = CHANNEL_ALIASES[String(value || 'preview').trim().toLowerCase()];
-  if (!c) throw new Error(`Unknown channel "${value}". Use preview, whatsapp or sms.`);
+  if (!c) throw new Error(`Unknown channel "${value}". Use preview, email, whatsapp or sms.`);
   return c;
 }
 
 export function channelName(channel) {
-  return { 'whatsapp-cloud': 'WhatsApp', pindo: 'SMS', preview: 'preview' }[channel] || channel;
+  return { 'whatsapp-cloud': 'WhatsApp', pindo: 'SMS', email: 'email', preview: 'preview' }[channel] || channel;
 }
 
 // --- .env loading (no dependency) ---
@@ -81,6 +85,15 @@ export function normalizePhone(raw) {
   return `+250${digits}`;
 }
 
+// --- email normalization ---
+// " Clovis@Gmail.com " -> "clovis@gmail.com". Throws on anything that is not a
+// single plain address (no names, no lists).
+export function normalizeEmail(raw) {
+  const s = String(raw).trim().toLowerCase();
+  if (!/^[^\s@,;<>()]+@[^\s@,;<>()]+\.[a-z]{2,}$/.test(s)) throw new Error(`Invalid email address: "${raw}"`);
+  return s;
+}
+
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 function deepMerge(base, over) {
@@ -99,7 +112,7 @@ export function withDefaults(raw = {}) {
   const s = deepMerge(DEFAULT_SETTINGS, raw);
   const problems = [];
   try { s.channel = normalizeChannel(s.channel); } catch (e) { problems.push(e.message); }
-  try { new Intl.DateTimeFormat('en-US', { timeZone: s.timezone }); } catch { problems.push(`Unknown timezone "${s.timezone}".`); }
+  if (!zoneSupported(s.timezone)) problems.push(`Unknown timezone "${s.timezone}".`);
   for (const [label, v] of [
     ['dailyUpdateTime', s.dailyUpdateTime], ['weeklyOverviewTime', s.weeklyOverviewTime],
     ['quietHours.start', s.quietHours?.start], ['quietHours.end', s.quietHours?.end],
@@ -133,26 +146,41 @@ export function cleanRegulars(rows) {
   return out;
 }
 
-// Check and normalize contacts. Duplicate numbers are merged (any Yes wins).
+// Check and normalize contacts. A contact is reached by phone (WhatsApp/SMS),
+// by email, or both. Duplicates are merged (any Yes wins).
 export function cleanContacts(rows) {
-  const byPhone = new Map();
+  const out = [];
+  const byAddress = new Map(); // phone or email -> contact
   for (const c of rows || []) {
-    if (!c.number) {
-      if (c.role) log.warn(`[config] contact "${c.role}" has no number yet - skipped. Fill it in on the Contacts sheet.`);
+    let phone = null;
+    let email = null;
+    if (c.number) {
+      try { phone = normalizePhone(c.number); } catch (e) { log.warn(`[config] ${e.message} - number ignored.`); }
+    }
+    if (c.email) {
+      try { email = normalizeEmail(c.email); } catch (e) { log.warn(`[config] ${e.message} - email ignored.`); }
+    }
+    if (!phone && !email) {
+      if (c.role || c.name) log.warn(`[config] contact "${c.name || c.role}" has no number or email yet - skipped. Fill it in on the Contacts sheet.`);
       continue;
     }
-    let phone;
-    try { phone = normalizePhone(c.number); } catch (e) { log.warn(`[config] ${e.message} - skipped.`); continue; }
     const flags = { alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin };
-    const prev = byPhone.get(phone);
+    const prev = (phone && byAddress.get(phone)) || (email && byAddress.get(email));
     if (prev) {
-      log.warn(`[config] ${c.number} is listed twice - merged.`);
+      log.warn(`[config] ${c.number || c.email} is listed twice - merged.`);
       for (const k of Object.keys(flags)) prev[k] = prev[k] || flags[k];
+      if (!prev.phone && phone) prev.phone = phone;
+      if (!prev.email && email) prev.email = email;
+      if (phone) byAddress.set(phone, prev);
+      if (email) byAddress.set(email, prev);
       continue;
     }
-    byPhone.set(phone, { number: String(c.number), role: c.role || '', name: c.name || '', phone, ...flags });
+    const entry = { number: c.number ? String(c.number) : '', email: email || '', role: c.role || '', name: c.name || '', phone, ...flags };
+    out.push(entry);
+    if (phone) byAddress.set(phone, entry);
+    if (email) byAddress.set(email, entry);
   }
-  return [...byPhone.values()];
+  return out;
 }
 
 function readJson(dir, name) {
@@ -180,7 +208,7 @@ export function loadConfig(dir = path.resolve('config')) {
     _dir: dir,
     _mtimes: { 'settings.json': settings.mtime, 'regular-clients.json': regulars.mtime, 'contacts.json': contacts.mtime },
   };
-  if (!cfg.contacts.some((c) => c.admin)) log.warn('[config] no admin number set - technical, clash and renewal alerts will have nowhere to go.');
+  if (!cfg.contacts.some((c) => c.admin)) log.warn('[config] no admin contact set - technical, clash and renewal alerts will have nowhere to go.');
   if (!cfg.contacts.some((c) => c.reminders)) log.warn('[config] nobody has attendant reminders switched on.');
   return cfg;
 }
@@ -200,12 +228,21 @@ export function configChanged(cfg) {
 //   attendants -> "Attendant reminders" = Yes  (reminders, last-minute bookings)
 //   summaries  -> "Daily & weekly updates" = Yes
 //   admin      -> "Admin alerts" = Yes         (technical, clash, renewal, checks)
-//   everyone   -> every listed number          (welcome message)
+//   everyone   -> every listed contact         (welcome message)
 const GROUP_FLAG = { team: 'alerts', attendants: 'reminders', summaries: 'summaries', admin: 'admin' };
 
+// Where a contact is reached on a channel: the email address for email, the
+// phone number for WhatsApp/SMS. Preview shows whichever the contact has.
+export function addressOf(contact, channel) {
+  if (channel === 'email') return contact.email || null;
+  if (channel === 'preview') return contact.phone || contact.email || null;
+  return contact.phone || null;
+}
+
 export function recipients(cfg, group) {
+  const channel = cfg.settings?.channel;
   const list = group === 'everyone' ? cfg.contacts : cfg.contacts.filter((c) => c[GROUP_FLAG[group]]);
-  return [...new Set(list.map((c) => c.phone))];
+  return [...new Set(list.map((c) => addressOf(c, channel)).filter(Boolean))];
 }
 
 export function adminName(cfg) {

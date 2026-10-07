@@ -1,8 +1,52 @@
 # Zaria Court booking agent
 
-Watches Zaria Court's **Multi-Purpose Court** schedule on [Ticqet](https://ticqet.rw) around the clock and keeps the team informed on **WhatsApp** (or SMS): new bookings, cancellations, a morning update, and reminders for the attendants who open the court.
+Watches Zaria Court's **Multi-Purpose Court** schedule on [Ticqet](https://ticqet.rw) around the clock and keeps the team informed: new bookings, cancellations, a morning update, and reminders for the attendants who open the court.
+
+Two ways to run it:
+
+- **Email, free (recommended):** a Google Sheet with a script that runs on Google's servers every 5 minutes. No server, no card, no cost. See [Email alerts, free](#email-alerts-free-google-apps-script).
+- **WhatsApp or SMS:** the Node agent below, on an always-on Ubuntu server. These channels cost money and need a registered business for Meta or Pindo.
 
 It reads only the public court schedule (which hours are booked) - never customer names, phone numbers or payments.
+
+## Email alerts, free (Google Apps Script)
+
+Everything lives in one Google Sheet owned by a Google account (best: a Gmail account made for Zaria Court, so alerts come from it and do not depend on one person's account). Emails are sent from that account. A free account can email up to 100 people a day; at Zaria's volume that is about 30-60.
+
+**Build the script** (on the laptop with this repository):
+
+```powershell
+npm ci
+npm run build:apps-script          # writes apps-script/dist/Code.gs
+Get-Content apps-script\dist\Code.gs -Raw | Set-Clipboard    # copies it
+```
+
+The build pre-fills the new tabs with the regular clients and the contacts' names and roles from `config/` (never phone numbers), so `dist/` stays out of git.
+
+**Install it** (signed in to the Zaria Court Google account):
+
+1. Open [sheets.new](https://sheets.new) and name the sheet *Zaria Court Booking Alerts*.
+2. *Extensions > Apps Script*. Delete what is in `Code.gs`, paste (Ctrl+V), save (Ctrl+S).
+3. In the toolbar, pick **setup** and press **Run**. Google asks for permission: *Review permissions*, pick the account, then *Advanced > Go to ... (unsafe)* > *Allow*. (Every personal script shows this warning; the script only uses this sheet, Ticqet and email.)
+4. Back in the sheet (reload the page): the tabs are there, and a **Zaria Agent** menu.
+5. **Contacts** tab: type each person's email in the yellow cells. Tick what each person gets.
+6. *Zaria Agent > Send me a test email*. Check the inbox (and Spam).
+7. Leave **Settings > Channel** on *Preview* for a while: the **Preview** tab shows every email the agent would send. When it looks right, set Channel to **Email**. Within 5 minutes everyone gets a welcome email.
+
+Ask the team to turn on notifications for that email address, and to mark the first email *Not spam* if it lands there.
+
+| Tab | What it is |
+|---|---|
+| Status | Last check, whether Ticqet can be read, emails sent and left today, mistakes in the sheet |
+| Bookings Log | Every booking the agent sees, with when it was created on Ticqet. Settles "did they book online?" questions |
+| Contacts, Regular Clients, Settings, Facilities | What the team edits. Changes apply at the next check |
+| Preview | What would have been sent while Channel is *Preview* |
+
+If the sheet has a mistake (say, a mistyped email), the agent keeps using the last good settings, shows the mistake on the Status tab, and emails the admin once.
+
+**Updating the script:** rebuild, open *Extensions > Apps Script*, replace all of `Code.gs` with the new file, save. Nothing else: the tabs, the timer and the agent's memory stay.
+
+**How it differs from the server version:** it checks every 5 minutes instead of live, so an alert arrives within about 5 minutes of a booking, and reminders may be up to 10 minutes late. Its memory lives in the script's properties, and the booking log in the sheet.
 
 ## What it sends
 
@@ -139,10 +183,11 @@ grep "Monday 05 October 2026" data/bookings-log.jsonl
 
 | Folder | Contents |
 |---|---|
-| `src/` | The agent: `ticqet.js` (reading Ticqet), `engine.js` (decisions), `formatter.js` (all message wording), `senders/` (WhatsApp, SMS, preview) |
+| `src/` | The agent: `ticqet.js` (reading Ticqet), `engine.js` (decisions), `formatter.js` (all message wording), `email.js` (email layout), `workbook.js` (reading the setup sheet), `senders/` (WhatsApp, SMS, preview) |
+| `apps-script/` | The free Google version: `src/` (reading Ticqet over HTTPS, the sheet, Gmail) and `build.mjs`, which bundles it with `src/` into one `Code.gs` |
 | `tools/` | `npm run config` (workbook to config) and `npm run send-test` |
 | `config/` | `*.example.*` files are committed; your real workbook and JSON files stay on the server only |
-| `test/` | 69 offline tests: `npm test` |
+| `test/` | 81 offline tests, including the Google version run against fake Google services: `npm test` |
 
 ## Troubleshooting
 

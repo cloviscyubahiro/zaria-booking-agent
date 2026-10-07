@@ -1,7 +1,7 @@
 {
   "name": "zaria-booking-agent",
   "version": "1.0.0",
-  "description": "Watches Zaria Court's Multi-Purpose Court bookings on Ticqet (ticqet.rw) and alerts staff by WhatsApp or SMS.",
+  "description": "Watches Zaria Court's Multi-Purpose Court bookings on Ticqet (ticqet.rw) and alerts staff by email (free, Google Apps Script), WhatsApp or SMS.",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",
@@ -13,6 +13,7 @@
     "check": "node src/index.js --check",
     "config": "node tools/xlsx-to-config.js",
     "send-test": "node tools/send-test-message.js",
+    "build:apps-script": "node apps-script/build.mjs",
     "test": "node --test"
   },
   "dependencies": {
@@ -21,5 +22,8 @@
   },
   "overrides": {
     "@grpc/grpc-js": "^1.14.5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

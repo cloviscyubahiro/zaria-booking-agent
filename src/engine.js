@@ -29,7 +29,9 @@ const ADMIN_KINDS = new Set([
   'regular-slot-check', 'mass-removal', 'open-regular-slots', 'renewal',
   'technical', 'technical-recovered', 'send-cap', 'admin-overnight',
 ]);
-const REMINDER_TOLERANCE_MIN = 5; // a reminder may go out up to 5 min late (e.g. after a restart)
+// A reminder may go out up to 5 min late (e.g. after a restart). When the agent
+// only runs every few minutes, settings.reminderToleranceMinutes widens this.
+const REMINDER_TOLERANCE_MIN = 5;
 const MORNING_GRACE_MIN = 180; // send the morning update up to 3 h late, never in the evening
 const MORNING_DATA_WAIT_MIN = 15; // wait this long for fresh Ticqet data before the morning update
 
@@ -371,6 +373,7 @@ export class Engine {
     const iso = isoDate(today);
     const cur = this.minuteOfDay(n);
     const readyGap = mins.length > 1 ? mins[mins.length - 1] : 0; // ready by the last reminder
+    const tolerance = this.settings.reminderToleranceMinutes ?? REMINDER_TOLERANCE_MIN;
     const sessions = buildSessions(this.snapshot.days[today.label] || [], this.regulars, today, this.court);
 
     for (const s of sessions) {
@@ -378,7 +381,7 @@ export class Engine {
       if (cur >= start) continue;
       for (let i = 0; i < mins.length; i++) {
         const fireAt = start - mins[i];
-        const until = Math.min(fireAt + REMINDER_TOLERANCE_MIN, i + 1 < mins.length ? start - mins[i + 1] : start);
+        const until = Math.min(fireAt + tolerance, i + 1 < mins.length ? start - mins[i + 1] : start);
         const key = `rem|${iso}|${s.startHour}|${mins[i]}`;
         if (this.reminders.has(key) || cur < fireAt || cur >= until) continue;
         this.reminders.add(key);
@@ -515,13 +518,16 @@ export class Engine {
     }
   }
 
-  // One welcome per channel, once the agent has actually read Ticqet.
+  // One welcome per channel, once the agent has actually read Ticqet and there
+  // is someone to welcome (contacts may be added after the agent starts).
   async maybeWelcome() {
     const channel = this.settings.channel;
     const key = `welcome|${channel}`;
     if (this.jobs[key] || this.settings.sendWelcome === false) return;
     if (this.snapshot.days[this.today().label] === undefined) return;
     if (this.inQuietHours()) return;
+    const everyone = recipients(this.cfg, 'everyone');
+    if (!everyone.length) return;
     this.jobs[key] = this.stamp();
     this.saveJobs();
     await this.send('welcome', fmt.welcome({
@@ -529,7 +535,7 @@ export class Engine {
       courtName: this.court,
       dailyTime: clockLabelMinutes(hhmmToMinutes(this.settings.dailyUpdateTime)),
       adminName: adminName(this.cfg),
-    }), recipients(this.cfg, 'everyone'));
+    }), everyone);
   }
 
   // Server double-check of today plus one other date, rotating through the window.

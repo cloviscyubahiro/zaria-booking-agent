@@ -26,15 +26,49 @@ export function ticqetLabel(y, m, d) {
   return `${WEEKDAYS[weekdayOf(y, m, d)]} ${dd} ${MONTHS[m - 1]} ${y}`;
 }
 
+// "Thursday 01 October 2026" -> { y: 2026, m: 10, d: 1, label }, or null.
+export function dayFromLabel(label) {
+  const m = String(label).match(/^[A-Za-z]+ (\d{1,2}) ([A-Za-z]+) (\d{4})$/);
+  const month = m ? MONTHS.indexOf(m[2]) + 1 : 0;
+  if (!m || !month) return null;
+  return { y: Number(m[3]), m: month, d: Number(m[1]), label };
+}
+
+// Fixed UTC offsets (minutes), used only if the JavaScript runtime cannot do
+// time-zone conversion itself. Rwanda has no daylight saving, so Kigali is
+// always UTC+2.
+const FIXED_OFFSETS = { 'Africa/Kigali': 120, UTC: 0, 'Etc/UTC': 0 };
+
+export function zoneSupported(timezone) {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return true;
+  } catch {
+    return Object.prototype.hasOwnProperty.call(FIXED_OFFSETS, timezone);
+  }
+}
+
+// Wall-clock date/time at a fixed offset from UTC.
+export function nowAtOffset(offsetMinutes, at = new Date()) {
+  const t = new Date(at.getTime() + offsetMinutes * 60000);
+  return { y: t.getUTCFullYear(), m: t.getUTCMonth() + 1, d: t.getUTCDate(), hour: t.getUTCHours(), minute: t.getUTCMinutes() };
+}
+
 // The current wall-clock date/time in a given IANA timezone (e.g. Africa/Kigali),
 // returned as plain numbers. This is what "today" and "now" mean to the agent.
 export function nowInZone(timezone, at = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: timezone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false,
-  }).formatToParts(at);
+  let parts;
+  try {
+    parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(at);
+  } catch (err) {
+    if (!Object.prototype.hasOwnProperty.call(FIXED_OFFSETS, timezone)) throw err;
+    return nowAtOffset(FIXED_OFFSETS[timezone], at);
+  }
   const get = (t) => Number(parts.find((p) => p.type === t).value);
   let hour = get('hour');
   if (hour === 24) hour = 0; // some environments emit 24 for midnight

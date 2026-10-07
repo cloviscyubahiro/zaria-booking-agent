@@ -35,4 +35,50 @@ test('the example workbook converts to valid config', async () => {
   assert.deepEqual(res.settings.attendantReminderMinutes, [60, 15]);
   assert.deepEqual(res.settings.quietHours, { start: '23:00', end: '06:00' });
   assert.equal(res.settings.adminName, 'Clovis');
+  assert.ok(res.contacts.every((c) => !('email' in c)), 'no Email column, no email field');
+});
+
+const { convertSheets } = await import('../src/workbook.js');
+
+// The Google Sheet layout used by the Apps Script version: Email instead of Number.
+function googleSheet({ contacts, channel = 'Email' }) {
+  return [
+    { sheet: 'Contacts', data: [
+      ['Contacts - who receives what'],
+      [],
+      ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', 'Attendant reminders', 'Admin alerts'],
+      ...contacts,
+    ] },
+    { sheet: 'Regular Clients', data: [
+      ['Client', 'Facility', 'Day', 'Start', 'End', 'Type', 'From', 'Until'],
+      ['MTN', 'Multi-Purpose Court', 'Tuesday', '17:00', '19:00', 'Monthly', '', '2026-10-31'],
+    ] },
+    { sheet: 'Settings', data: [['Setting', 'Value'], ['Channel', channel], ['Email sender name', 'Zaria Court Alerts']] },
+  ];
+}
+
+test('Google Sheet contacts: emails are read, checked and matched to the channel', () => {
+  const res = convertSheets(googleSheet({ contacts: [
+    ['Alex', 'Attendant', ' Alex@Gmail.com', 'Yes', 'Yes', 'Yes', 'No'],
+    ['Jimmy', 'Operations', '', 'Yes', 'Yes', 'No', 'No'],
+    ['Clovis', 'Admin', 'clovis@example.com', 'No', 'No', 'No', 'Yes'],
+  ] }));
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.contacts.map((c) => c.email), ['alex@gmail.com', 'clovis@example.com']);
+  assert.equal(res.contacts[0].number, '');
+  assert.equal(res.settings.channel, 'email');
+  assert.equal(res.settings.emailSenderName, 'Zaria Court Alerts');
+  assert.equal(res.settings.adminName, 'Clovis');
+  assert.equal(res.regulars[0].until, '2026-10-31');
+  assert.ok(res.warnings.some((w) => /row 5 \(Jimmy\): no email yet - skipped/.test(w)), res.warnings.join('\n'));
+});
+
+test('Google Sheet contacts: a bad or repeated email is an error naming the row', () => {
+  const res = convertSheets(googleSheet({ contacts: [
+    ['Alex', 'Attendant', 'alex@gmail', 'Yes', 'Yes', 'Yes', 'No'],
+    ['Vianney', 'Attendant', 'v@gmail.com', 'Yes', 'Yes', 'Yes', 'No'],
+    ['Vianney again', 'Attendant', 'V@Gmail.com', 'Yes', 'Yes', 'Yes', 'No'],
+  ] }));
+  assert.ok(res.errors.some((e) => /row 4: "alex@gmail" is not a valid email/.test(e)), res.errors.join('\n'));
+  assert.ok(res.errors.some((e) => /row 6: V@Gmail.com is listed twice/.test(e)), res.errors.join('\n'));
 });
