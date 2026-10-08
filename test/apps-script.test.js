@@ -5,8 +5,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import vm from 'node:vm';
-import { buildAppsScript } from '../apps-script/build.mjs';
+import { buildAppsScript, localDefaults } from '../apps-script/build.mjs';
 
 const KEY = `AIza${'K'.repeat(35)}`;
 const EVENT = 'wyUcHcKLSP52EBIr9asf';
@@ -347,6 +350,17 @@ test('a mistake in the sheet keeps the last good settings and tells the admin on
   g.at('2026-10-07T08:15:00Z');
   await g.run('runAgent');
   assert.equal(g.sent.length, 0, 'the same mistake is reported only once');
+});
+
+test('the build pre-fills names and emails from config/, never phone numbers', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaria-build-'));
+  fs.writeFileSync(path.join(dir, 'contacts.json'), JSON.stringify([
+    { number: '0788123456', email: 'boss@example.com', role: 'Admin', name: 'Clovis', alerts: false, summaries: false, reminders: false, admin: true },
+    { number: '0788123457', role: 'Attendant', name: 'Alex', alerts: true, summaries: true, reminders: true, admin: false },
+  ]));
+  const d = localDefaults(dir);
+  assert.deepEqual(d.contacts.map((c) => [c.name, c.email]), [['Clovis', 'boss@example.com'], ['Alex', '']]);
+  assert.doesNotMatch(JSON.stringify(d), /0788/, 'no phone numbers');
 });
 
 test('the test email goes to the admin and to whoever runs it', async () => {

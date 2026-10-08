@@ -5,8 +5,8 @@
 // It bundles the shared agent code (src/) with the Apps Script parts
 // (apps-script/src/), swapping the Node-only modules (files, logging) for their
 // Apps Script versions. New tabs are pre-filled from the local config:
-// regular clients, and contact names, roles and ticks - never phone numbers.
-// Because of those names, dist/ is not committed to git.
+// regular clients, and contact names, roles, emails and ticks - never phone
+// numbers. Because of those names and emails, dist/ is not committed to git.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +40,7 @@ function sendTestEmail() { return ZariaAgent.sendTestEmail(); }
 function onOpen(e) { return ZariaAgent.onOpen(e); }
 `;
 
-// Regular clients and contacts (names, roles, ticks) from the local config.
+// Regular clients and contacts (names, roles, emails, ticks) from the local config.
 export function localDefaults(dir = path.join(root, 'config')) {
   const read = (f) => {
     try {
@@ -51,7 +51,8 @@ export function localDefaults(dir = path.join(root, 'config')) {
   };
   const regulars = read('regular-clients.json') || read('regular-clients.example.json') || [];
   const contacts = (read('contacts.json') || []).map((c) => ({
-    name: c.name || '', role: c.role || '', alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin,
+    name: c.name || '', role: c.role || '', email: c.email || '',
+    alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin,
   }));
   const settings = read('settings.json') || {};
   if (!contacts.some((c) => c.admin)) {
@@ -103,6 +104,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const defaults = localDefaults();
   const code = await buildAppsScript({ defaults });
   console.log(`Built ${path.relative(root, OUTFILE)} (${Math.round(code.length / 1024)} KB)`);
-  console.log(`  pre-fill: ${defaults.regulars.length} regular client rows, ${defaults.contacts.length} contacts (names and roles only)`);
+  const withEmail = defaults.contacts.filter((c) => c.email).length;
+  console.log(`  pre-fill: ${defaults.regulars.length} regular client rows, ${defaults.contacts.length} contacts (${withEmail} with email; never phone numbers)`);
   console.log('Paste it into the Apps Script editor (README > "Email alerts, free").');
 }

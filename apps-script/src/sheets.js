@@ -139,12 +139,12 @@ const BUILDERS = {
     title(sh, 'Who gets the emails', 'One person per row. Tick what each person gets. Admin alerts = possible double-bookings, technical problems, regular hours left open on Ticqet.');
     header(sh, 4, ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', 'Attendant reminders', 'Admin alerts'],
       [140, 170, 250, 110, 120, 110, 100]);
-    const rows = defaults.contacts.map((c) => [c.name || '', c.role || '', '', !!c.alerts, !!c.summaries, !!c.reminders, !!c.admin]);
+    const rows = defaults.contacts.map((c) => [c.name || '', c.role || '', c.email || '', !!c.alerts, !!c.summaries, !!c.reminders, !!c.admin]);
     sh.getRange(5, 4, 20, 4).insertCheckboxes();
-    if (rows.length) {
-      sh.getRange(5, 1, rows.length, 7).setValues(rows);
-      sh.getRange(5, 3, rows.length, 1).setBackground(FILL_ME);
-    }
+    if (rows.length) sh.getRange(5, 1, rows.length, 7).setValues(rows);
+    rows.forEach((r, i) => {
+      if (!r[2]) sh.getRange(5 + i, 3).setBackground(FILL_ME); // email still to fill in
+    });
     sh.getRange(5, 3, 20, 1).setDataValidation(
       SpreadsheetApp.newDataValidation().requireTextIsEmail().setAllowInvalid(false).setHelpText('One email address, e.g. name@gmail.com').build(),
     );
