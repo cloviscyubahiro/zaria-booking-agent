@@ -119,6 +119,43 @@ function title(sh, text, note) {
 
 const list = (values) => SpreadsheetApp.newDataValidation().requireValueInList(values, true).setAllowInvalid(false).build();
 
+// Column titles for the two reminders, e.g. "Reminder 1 (60 min before)". The
+// agent finds the columns by their start ("Reminder 1"), so the rest is a label.
+function reminderLabels(settings) {
+  const [a = 60, b = 15] = settings.attendantReminderMinutes || [];
+  return [`Reminder 1 (${a} min before)`, `Reminder 2 (${b} min before)`];
+}
+
+// Sheets made before reminders had a column each have one "Attendant
+// reminders" column (= both reminders). Turn it into "Reminder 1" and add a
+// "Reminder 2" column next to it with the same ticks, so nobody loses a
+// reminder. Returns true if the sheet was changed.
+export function upgradeContacts(ss, settings) {
+  const sh = ss.getSheetByName(TABS.contacts);
+  if (!sh) return false;
+  const values = sh.getDataRange().getValues();
+  const norm = (v) => String(v).trim().toLowerCase();
+  const hi = values.findIndex((r) => r.some((v) => norm(v) === 'email' || norm(v) === 'number'));
+  if (hi < 0) return false;
+  const head = values[hi].map(norm);
+  const old = head.indexOf('attendant reminders');
+  if (old < 0 || head.some((h) => h.startsWith('reminder 1'))) return false;
+
+  const col = old + 1; // 1-based
+  const [m1, m2] = reminderLabels(settings);
+  sh.insertColumnAfter(col);
+  sh.getRange(hi + 1, col, 1, 2).setValues([[m1, m2]])
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground(NAVY).setWrap(true);
+  const rows = values.length - hi - 1;
+  if (rows > 0) {
+    const ticks = values.slice(hi + 1).map((r) => [r[old] === true]);
+    sh.getRange(hi + 2, col + 1, rows, 1).insertCheckboxes().setValues(ticks);
+  }
+  sh.setColumnWidth(col, 120);
+  sh.setColumnWidth(col + 1, 120);
+  return true;
+}
+
 const BUILDERS = {
   [TABS.status](sh) {
     title(sh, 'Agent status', 'Updated every time the agent checks Ticqet (every 5 minutes).');
@@ -137,11 +174,15 @@ const BUILDERS = {
 
   [TABS.contacts](sh, defaults) {
     title(sh, 'Who gets the emails', 'One person per row. Tick what each person gets. Admin alerts = possible double-bookings, technical problems, regular hours left open on Ticqet.');
-    header(sh, 4, ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', 'Attendant reminders', 'Admin alerts'],
-      [140, 170, 250, 110, 120, 110, 100]);
-    const rows = defaults.contacts.map((c) => [c.name || '', c.role || '', c.email || '', !!c.alerts, !!c.summaries, !!c.reminders, !!c.admin]);
-    sh.getRange(5, 4, 20, 4).insertCheckboxes();
-    if (rows.length) sh.getRange(5, 1, rows.length, 7).setValues(rows);
+    const [m1, m2] = reminderLabels(defaults.settings);
+    header(sh, 4, ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', m1, m2, 'Admin alerts'],
+      [140, 170, 250, 110, 120, 120, 120, 100]);
+    const rows = defaults.contacts.map((c) => [
+      c.name || '', c.role || '', c.email || '', !!c.alerts, !!c.summaries,
+      !!(c.reminder1 ?? c.reminders), !!(c.reminder2 ?? c.reminders), !!c.admin,
+    ]);
+    sh.getRange(5, 4, 20, 5).insertCheckboxes();
+    if (rows.length) sh.getRange(5, 1, rows.length, 8).setValues(rows);
     rows.forEach((r, i) => {
       if (!r[2]) sh.getRange(5 + i, 3).setBackground(FILL_ME); // email still to fill in
     });

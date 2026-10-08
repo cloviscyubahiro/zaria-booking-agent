@@ -164,7 +164,11 @@ export function cleanContacts(rows) {
       if (c.role || c.name) log.warn(`[config] contact "${c.name || c.role}" has no number or email yet - skipped. Fill it in on the Contacts sheet.`);
       continue;
     }
-    const flags = { alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin };
+    // reminder1 / reminder2: the first (e.g. 60 min) and second (e.g. 15 min)
+    // reminder before a session. The older single "reminders" tick means both.
+    const r1 = !!(c.reminder1 ?? c.reminders);
+    const r2 = !!(c.reminder2 ?? c.reminders);
+    const flags = { alerts: !!c.alerts, summaries: !!c.summaries, reminders: r1 || r2, reminder1: r1, reminder2: r2, admin: !!c.admin };
     const prev = (phone && byAddress.get(phone)) || (email && byAddress.get(email));
     if (prev) {
       log.warn(`[config] ${c.number || c.email} is listed twice - merged.`);
@@ -225,11 +229,21 @@ export function configChanged(cfg) {
 
 // Who receives what:
 //   team       -> "New booking alerts" = Yes   (new / cancelled / changed bookings)
-//   attendants -> "Attendant reminders" = Yes  (reminders, last-minute bookings)
+//   reminder1  -> "Reminder 1" = Yes           (first reminder, e.g. 60 min before)
+//   reminder2  -> "Reminder 2" = Yes           (second reminder, e.g. 15 min before)
+//   attendants -> either reminder              (last-minute bookings)
 //   summaries  -> "Daily & weekly updates" = Yes
 //   admin      -> "Admin alerts" = Yes         (technical, clash, renewal, checks)
 //   everyone   -> every listed contact         (welcome message)
-const GROUP_FLAG = { team: 'alerts', attendants: 'reminders', summaries: 'summaries', admin: 'admin' };
+// An older contact with only "reminders" (Attendant reminders) gets both reminders.
+const GROUP_FLAG = { team: 'alerts', summaries: 'summaries', admin: 'admin' };
+
+function inGroup(c, group) {
+  if (group === 'everyone') return true;
+  if (group === 'attendants') return !!(c.reminders || c.reminder1 || c.reminder2);
+  if (group === 'reminder1' || group === 'reminder2') return !!(c[group] ?? c.reminders);
+  return !!c[GROUP_FLAG[group]];
+}
 
 // Where a contact is reached on a channel: the email address for email, the
 // phone number for WhatsApp/SMS. Preview shows whichever the contact has.
@@ -241,7 +255,7 @@ export function addressOf(contact, channel) {
 
 export function recipients(cfg, group) {
   const channel = cfg.settings?.channel;
-  const list = group === 'everyone' ? cfg.contacts : cfg.contacts.filter((c) => c[GROUP_FLAG[group]]);
+  const list = cfg.contacts.filter((c) => inGroup(c, group));
   return [...new Set(list.map((c) => addressOf(c, channel)).filter(Boolean))];
 }
 

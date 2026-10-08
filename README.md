@@ -55,8 +55,8 @@ If the sheet has a mistake (say, a mistyped email), the agent keeps using the la
 | New booking / cancelled / changed | About 1-2 minutes after it happens on Ticqet. Between 11 PM and 6 AM it waits and is added to the morning update. | New booking alerts = Yes |
 | Daily update | Every morning at 6:30 | Daily & weekly updates = Yes |
 | Weekly overview | Monday 6:30, instead of that day's daily update | Daily & weekly updates = Yes |
-| Reminders | 60 and 15 minutes before every session, Ticqet or regular client | Attendant reminders = Yes |
-| Last-minute booking | A booking that starts within the hour: attendants get one message instead of two reminders | Attendant reminders = Yes |
+| Reminders | 60 and 15 minutes before every session, Ticqet or regular client | Reminder 1 (60 min) / Reminder 2 (15 min) = Yes; an older "Attendant reminders" column means both |
+| Last-minute booking | A booking that starts within the hour: one message instead of the reminders | Either reminder = Yes |
 | Admin alerts | A booking landing in a regular client's slot (possible double-booking); regular hours still open on Ticqet (each morning); renewal 3 days before a client's Until date; Ticqet unreadable for 15 min (and when it's back); anything unusual | Admin alerts = Yes |
 
 Regular clients (booked directly with Zaria) are never announced as new bookings; they appear by name in the updates and reminders.

@@ -73,6 +73,23 @@ test('Google Sheet contacts: emails are read, checked and matched to the channel
   assert.ok(res.warnings.some((w) => /row 5 \(Jimmy\): no email yet - skipped/.test(w)), res.warnings.join('\n'));
 });
 
+test('Google Sheet contacts: a column per reminder, and a warning if one has nobody', () => {
+  const sheets = googleSheet({ contacts: [] });
+  sheets[0].data[2] = ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', 'Reminder 1 (60 min before)', 'Reminder 2 (15 min before)', 'Admin alerts'];
+  sheets[0].data.push(
+    ['Jimmy', 'Operations', 'jimmy@gmail.com', true, true, true, false, false],
+    ['Alex', 'Attendant', '', true, true, false, true, false],
+  );
+  const res = convertSheets(sheets);
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.contacts[0], {
+    number: '', email: 'jimmy@gmail.com', role: 'Operations', name: 'Jimmy',
+    alerts: true, summaries: true, reminders: true, reminder1: true, reminder2: false, admin: false,
+  });
+  assert.ok(res.warnings.some((w) => /Nobody gets Reminder 2 \(15 min before a session\)/.test(w)), res.warnings.join('\n'));
+  assert.ok(!res.warnings.some((w) => /Reminder 1/.test(w)));
+});
+
 test('Google Sheet contacts: a bad or repeated email is an error naming the row', () => {
   const res = convertSheets(googleSheet({ contacts: [
     ['Alex', 'Attendant', 'alex@gmail', 'Yes', 'Yes', 'Yes', 'No'],

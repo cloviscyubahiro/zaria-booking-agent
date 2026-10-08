@@ -250,6 +250,25 @@ test('reminders go to attendants only, 60 and 15 minutes before, once each, up t
   assert.equal(phone.kind('reminder').length, 2);
 });
 
+test('split reminders: a colleague gets the 60-min one, the attendant the 15-min one', async () => {
+  const contacts = [
+    { phone: TEAM1, alerts: true, summaries: true, reminder1: true, reminder2: false, admin: false },
+    { phone: ATTENDANT, alerts: true, summaries: true, reminder1: false, reminder2: true, admin: false },
+    { phone: TEAM3, alerts: true, summaries: true, reminders: false, admin: false },
+  ];
+  const { clock, ticqet, phone, engine } = setup({ at: '2026-10-06T15:00:00Z', contacts });
+  ticqet.set(TUE6, [{ id: 'mtn', seats: ['17', '18'] }]);
+  await engine.tick();
+  clock.set('2026-10-06T16:00:00Z');
+  await engine.minuteTick();
+  assert.deepEqual(to(phone.kind('reminder')), [TEAM1], '60 min before: the colleague only');
+  phone.clear();
+  clock.set('2026-10-06T16:45:00Z');
+  await engine.minuteTick();
+  assert.deepEqual(to(phone.kind('reminder')), [ATTENDANT], '15 min before: the attendant only');
+  assert.match(phone.kind('reminder')[0].text, /Starts in 15 min/);
+});
+
 test('regulars not blocked on Ticqet still get reminders (the list is the truth for regulars)', async () => {
   const { clock, phone, engine } = setup({ at: '2026-10-06T15:00:00Z' });
   await engine.tick(); // Ticqet shows nothing today

@@ -364,7 +364,8 @@ export class Engine {
     this.prune();
   }
 
-  // Attendant reminders before every session today (Ticqet and regular).
+  // Reminders before every session today (Ticqet and regular). The first one
+  // (e.g. 60 min) goes to the "Reminder 1" people, later ones to "Reminder 2".
   async tickReminders() {
     const mins = this.settings.attendantReminderMinutes;
     if (!mins.length) return;
@@ -386,7 +387,7 @@ export class Engine {
         if (this.reminders.has(key) || cur < fireAt || cur >= until) continue;
         this.reminders.add(key);
         store.saveReminders(this.reminders);
-        await this.send('reminder', fmt.reminder(s, this.court, mins[i], i === 0, start - readyGap), recipients(this.cfg, 'attendants'));
+        await this.send('reminder', fmt.reminder(s, this.court, mins[i], i === 0, start - readyGap), recipients(this.cfg, i === 0 ? 'reminder1' : 'reminder2'));
       }
     }
   }

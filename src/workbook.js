@@ -154,7 +154,11 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       number: ct.col('number', 'phone'), email: ct.col('email'), role: ct.col('role'), name: ct.col('name'),
       alerts: ct.col('new booking alerts'), summaries: ct.col('daily & weekly updates', 'daily'),
       reminders: ct.col('attendant reminders'), admin: ct.col('admin alerts', 'technical alerts'),
+      // Separate columns per reminder ("Reminder 1 (60 min before)", "Reminder 2 ...")
+      // replace the single "Attendant reminders" column when present.
+      reminder1: ct.col('reminder 1'), reminder2: ct.col('reminder 2'),
     };
+    const split = c.reminder1 >= 0 || c.reminder2 >= 0;
     const cell = (r, i) => (i >= 0 ? str(r[i]) : '');
     const seen = new Set();
     for (const { r, excelRow } of ct.rows) {
@@ -179,6 +183,8 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       if (dup) { errors.push(`Contacts row ${excelRow}: ${dup === phone ? number : email} is listed twice.`); continue; }
       if (phone) seen.add(phone);
       if (mail) seen.add(mail);
+      const r1 = yes(r[c.reminder1]);
+      const r2 = yes(r[c.reminder2]);
       contacts.push({
         number: phone ? `0${phone.slice(4)}` : '',
         ...(c.email >= 0 ? { email: mail || '' } : {}),
@@ -186,13 +192,14 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
         name,
         alerts: yes(r[c.alerts]),
         summaries: yes(r[c.summaries]),
-        reminders: yes(r[c.reminders]),
+        reminders: split ? r1 || r2 : yes(r[c.reminders]),
+        ...(split ? { reminder1: r1, reminder2: r2 } : {}),
         admin: yes(r[c.admin]),
       });
       contactRows.push({ excelRow, who });
     }
     if (!contacts.some((x) => x.admin)) warnings.push('No admin contact yet: technical alerts, double-booking checks and renewal reminders will not be sent.');
-    if (!contacts.some((x) => x.reminders)) warnings.push('Nobody has "Attendant reminders" set to Yes.');
+    if (!split && !contacts.some((x) => x.reminders)) warnings.push('Nobody gets reminders before sessions ("Attendant reminders" column).');
   }
 
   // ---------- Settings ----------
@@ -241,6 +248,14 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
     });
   } catch (e) {
     errors.push(e.message);
+  }
+
+  // A reminder column nobody is ticked in (or only people without an address).
+  if (settings && ct && (ct.col('reminder 1') >= 0 || ct.col('reminder 2') >= 0)) {
+    settings.attendantReminderMinutes.slice(0, 2).forEach((mins, i) => {
+      const key = i === 0 ? 'reminder1' : 'reminder2';
+      if (!contacts.some((x) => x[key])) warnings.push(`Nobody gets Reminder ${i + 1} (${mins} min before a session): tick someone in that column.`);
+    });
   }
 
   // Contacts who cannot be reached on the chosen channel.

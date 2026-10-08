@@ -38,6 +38,18 @@ test('contacts: duplicates merge, numbers without digits are skipped, groups res
   assert.equal(recipients(cfg, 'everyone').length, 2);
 });
 
+test('reminders: one column each, or the older single tick meaning both', () => {
+  const contacts = cleanContacts([
+    { number: '0780000001', reminder1: true, reminder2: false },
+    { number: '0780000002', reminder1: false, reminder2: true },
+    { number: '0780000003', reminders: true }, // older sheet: both
+  ]);
+  const cfg = { contacts, settings: {} };
+  assert.deepEqual(recipients(cfg, 'reminder1'), ['+250780000001', '+250780000003']);
+  assert.deepEqual(recipients(cfg, 'reminder2'), ['+250780000002', '+250780000003']);
+  assert.equal(recipients(cfg, 'attendants').length, 3, 'anyone with a reminder gets last-minute bookings');
+});
+
 test('email addresses: tidied, and anything that is not one address is refused', () => {
   assert.equal(normalizeEmail('  Clovis.C@Gmail.com '), 'clovis.c@gmail.com');
   for (const bad of ['clovis', 'clovis@gmail', 'a b@gmail.com', 'a@x.com, b@y.com', 'Clovis <c@gmail.com>']) {

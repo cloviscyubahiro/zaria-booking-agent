@@ -68,6 +68,9 @@ class FakeSheet {
     return v === undefined ? '' : v;
   }
   deleteRows(start, count) { this.cells.splice(start - 1, count); }
+  insertColumnAfter(col) {
+    for (const line of this.cells) if (line && line.length > col) line.splice(col, 0, '');
+  }
   // test helpers
   rows() { return this.cells.slice(0, this.getLastRow()); }
   find(text) { return this.cells.findIndex((r) => (r || []).includes(text)) + 1; }
@@ -232,7 +235,9 @@ test('setup creates the tabs and the 5-minute timer; the first check is silent',
   assert.equal(g.sent.length, 0, 'nothing emailed: channel is Preview and no emails are filled in yet');
 
   const contacts = g.sheet('Contacts').rows();
-  assert.deepEqual(contacts[4], ['Jimmy', 'Operations', '', true, true, false, false]);
+  assert.deepEqual(contacts[3].slice(5, 7), ['Reminder 1 (60 min before)', 'Reminder 2 (15 min before)']);
+  assert.deepEqual(contacts[4], ['Jimmy', 'Operations', '', true, true, false, false, false]);
+  assert.deepEqual(contacts[5].slice(0, 7), ['Alex', 'Attendant', '', true, true, true, true]);
   assert.equal(g.sheet('Settings').get(g.sheet('Settings').find('Channel'), 2), 'Preview');
 
   const log = g.sheet('Bookings Log').rows();
@@ -350,6 +355,43 @@ test('a mistake in the sheet keeps the last good settings and tells the admin on
   g.at('2026-10-07T08:15:00Z');
   await g.run('runAgent');
   assert.equal(g.sent.length, 0, 'the same mistake is reported only once');
+});
+
+test('a sheet made before the split gets Reminder 1 and Reminder 2 columns, with the same ticks', async () => {
+  const g = makeGoogle('2026-10-08T08:00:00Z'); // Thu 8 Oct, 10:00 Kigali; MTN plays 5-7 PM
+  g.ticqet.add('Thursday 08 October 2026', 'mtn8', ['17', '18']);
+  vm.runInContext(code, g.context);
+  await g.run('setup');
+  // Rebuild the Contacts tab the way the first version made it (one reminder column).
+  const sh = g.sheet('Contacts');
+  sh.cells.splice(3);
+  sh.cells.push(
+    ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', 'Attendant reminders', 'Admin alerts'],
+    ['Jimmy', 'Operations', 'jimmy@zaria.rw', true, true, false, false],
+    ['Alex', 'Attendant', 'alex@gmail.com', true, true, true, false],
+    ['Clovis', 'Admin', 'clovis@gmail.com', false, false, false, true],
+    ['', '', '', false, false, false, false],
+  );
+  g.sheet('Settings').set(g.sheet('Settings').find('Channel'), 2, 'Email');
+  g.at('2026-10-08T08:05:00Z');
+  await g.run('runAgent');
+  assert.deepEqual(sh.rows()[3], ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates',
+    'Reminder 1 (60 min before)', 'Reminder 2 (15 min before)', 'Admin alerts']);
+  assert.deepEqual(sh.rows()[5], ['Alex', 'Attendant', 'alex@gmail.com', true, true, true, true, false], 'same ticks in both');
+  assert.deepEqual(sh.rows()[6].slice(5), [false, false, true], 'Admin alerts moved one column right, still ticked');
+
+  // The team then moves the 60-min reminder to Jimmy, and keeps Alex on the 15-min one.
+  sh.set(5, 6, true);
+  sh.set(6, 6, false);
+  g.clearSent();
+  for (const t of ['13:57', '14:02', '14:47']) {
+    g.at(`2026-10-08T${t}:30Z`);
+    await g.run('runAgent');
+  }
+  assert.deepEqual(g.sent.filter((m) => /^(Reminder|Starts in)/.test(m.subject)).map((m) => [m.to, m.subject.split(':')[0]]), [
+    ['jimmy@zaria.rw', 'Reminder'],
+    ['alex@gmail.com', 'Starts in 15 min'],
+  ]);
 });
 
 test('the build pre-fills names and emails from config/, never phone numbers', () => {

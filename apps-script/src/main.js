@@ -124,6 +124,9 @@ export async function runAgent() {
   try {
     runtime.firstRunAt = runtime.firstRunAt || Date.now();
     ({ cfg, errors: configErrors, warnings } = loadConfig(ss, props));
+    // Older sheets: split "Attendant reminders" into Reminder 1 and Reminder 2
+    // (same ticks in both, so this run's config is unchanged).
+    if (sheets.upgradeContacts(ss, cfg.settings)) log.info('[setup] Contacts: reminders now have one column each');
     const sender = makeSender(cfg, previewItems);
     await reportConfigErrors(cfg, sender, configErrors, runtime);
 
