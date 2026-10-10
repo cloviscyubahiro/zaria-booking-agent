@@ -9,11 +9,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { log } from './logger.js';
 import { WEEKDAYS, zoneSupported } from './time.js';
+import { KNOWN_FACILITIES, resolveFacility, sameName } from './facilities.js';
+import { cleanChanges } from './changes.js';
+
+export { KNOWN_FACILITIES, resolveFacility };
 
 // Every setting has a safe default, so an older settings.json never crashes the agent.
 export const DEFAULT_SETTINGS = {
   timezone: 'Africa/Kigali',
-  venue: { name: 'Zaria Court', ticqetVenueId: 'mTNigTpKron5hpoNE2ws' },
+  venue: { name: 'Zaria Court', ticqetVenueId: 'mTNigTpKron5hpoNE2ws', facilities: KNOWN_FACILITIES },
+  // The main facility. "facilities" (the list of watched facilities) defaults
+  // to just this one; the first watched facility is always also "court".
   court: { name: 'Multi-Purpose Court', ticqetEventId: 'wyUcHcKLSP52EBIr9asf' },
   firebase: { projectId: 'kigali-arena', authDomain: 'kigali-arena.firebaseapp.com', apiKey: 'AUTO' },
   // windowDays: how far ahead to watch. settleSeconds: wait this long after a
@@ -35,6 +41,11 @@ export const DEFAULT_SETTINGS = {
   maxMessagesPerDay: 300,
   sendWelcome: true,
   adminName: 'the admin',
+  // One Ticqet booking this many hours long (or longer) is an event or event
+  // setup: the team gets a notice the day before, with the teams to call. 0 = off.
+  eventMinHours: 6,
+  // Umuganda, the last Saturday of every month. null = not shown.
+  umuganda: { start: '08:00', end: '11:00' },
 };
 
 const CHANNEL_ALIASES = {
@@ -122,7 +133,32 @@ export function withDefaults(raw = {}) {
   if (!WEEKDAYS.includes(s.weeklyOverviewDay)) problems.push(`weeklyOverviewDay must be a weekday name (got "${s.weeklyOverviewDay}").`);
   const mins = [...new Set((s.attendantReminderMinutes || []).map(Number))].filter((n) => Number.isInteger(n) && n > 0);
   s.attendantReminderMinutes = mins.sort((a, b) => b - a);
-  if (!s.court?.ticqetEventId) problems.push('court.ticqetEventId is missing.');
+
+  // The facilities to watch. Older settings name only "court".
+  const listed = Array.isArray(s.facilities) && s.facilities.length ? s.facilities : [s.court];
+  const facilities = [];
+  for (const f of listed) {
+    const name = String(f?.name ?? '').trim();
+    const id = String(f?.ticqetEventId ?? '').trim();
+    if (!name || !id) { problems.push(`Every watched facility needs a name and a Ticqet ID (got "${name}" / "${id}").`); continue; }
+    if (facilities.some((x) => x.ticqetEventId === id)) { problems.push(`The Ticqet ID ${id} is used for more than one facility.`); continue; }
+    if (facilities.some((x) => sameName(x.name, name))) { problems.push(`The facility "${name}" is listed twice.`); continue; }
+    facilities.push({ name, ticqetEventId: id });
+  }
+  if (!facilities.length && !problems.length) problems.push('No facility to watch: set one facility to Watch = Yes, with its Ticqet ID.');
+  s.facilities = facilities;
+  if (facilities.length) s.court = { ...facilities[0] };
+
+  const ev = Number(s.eventMinHours ?? 0);
+  if (!Number.isInteger(ev) || ev < 0 || ev > 24) problems.push(`eventMinHours must be a whole number of hours from 0 to 24 (got "${s.eventMinHours}").`);
+  else s.eventMinHours = ev;
+  if (s.umuganda) {
+    const { start, end } = s.umuganda;
+    if (!HHMM.test(String(start)) || !HHMM.test(String(end)) || end <= start) problems.push(`umuganda must be two 24-hour times like 08:00-11:00 (got "${start}-${end}").`);
+  } else {
+    s.umuganda = null;
+  }
+
   const wd = Number(s.watch?.windowDays);
   if (!Number.isInteger(wd) || wd < 1 || wd > 90) problems.push('watch.windowDays must be between 1 and 90.');
   if (problems.length) throw new Error(`Settings problem: ${problems.join(' ')}`);
@@ -130,8 +166,9 @@ export function withDefaults(raw = {}) {
 }
 
 // Check and normalize regular client rows. Bad rows are skipped with a warning
-// rather than stopping the agent.
-export function cleanRegulars(rows) {
+// rather than stopping the agent. A row without a facility belongs to the main
+// facility; a facility name is matched loosely ("Pitch A" = "5-a-side Pitch A").
+export function cleanRegulars(rows, facilities = null) {
   const out = [];
   for (const [i, r] of (rows || []).entries()) {
     const where = `regular client row ${i + 1} (${r.client || 'no name'})`;
@@ -141,7 +178,13 @@ export function cleanRegulars(rows) {
     if (r.end <= r.start) { log.warn(`[config] ${where}: end must be after start - skipped.`); continue; }
     if (!r.start.endsWith(':00') || !r.end.endsWith(':00')) log.warn(`[config] ${where}: Ticqet works in whole hours; ${r.start}-${r.end} is rounded to the hour.`);
     const iso = (v) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
-    out.push({ ...r, from: iso(r.from), until: iso(r.until) });
+    let facility = r.facility || null;
+    if (facilities?.length) {
+      const f = facility ? resolveFacility(facility, facilities) : facilities[0];
+      if (f) facility = f.name;
+      else log.warn(`[config] ${where}: facility "${facility}" is not one of the watched facilities.`);
+    }
+    out.push({ ...r, facility, from: iso(r.from), until: iso(r.until) });
   }
   return out;
 }
@@ -199,19 +242,26 @@ function readJson(dir, name) {
   }
 }
 
-// Load everything. Returns { settings, regulars, contacts } plus file mtimes.
+// Load everything. Returns { settings, regulars, contacts, changes } plus file
+// mtimes. config/schedule-changes.json (one-off changes, see changes.js) is optional.
 export function loadConfig(dir = path.resolve('config')) {
   const settings = readJson(dir, 'settings.json');
   const regulars = readJson(dir, 'regular-clients.json');
   const contacts = readJson(dir, 'contacts.json');
+  const changesFile = path.join(dir, 'schedule-changes.json');
+  const changes = fs.existsSync(changesFile) ? readJson(dir, 'schedule-changes.json') : { data: [], mtime: 0 };
 
+  const s = withDefaults(settings.data);
   const cfg = {
-    settings: withDefaults(settings.data),
-    regulars: cleanRegulars(regulars.data),
+    settings: s,
+    regulars: cleanRegulars(regulars.data, s.facilities),
     contacts: cleanContacts(contacts.data),
     _dir: dir,
-    _mtimes: { 'settings.json': settings.mtime, 'regular-clients.json': regulars.mtime, 'contacts.json': contacts.mtime },
+    _mtimes: { 'settings.json': settings.mtime, 'regular-clients.json': regulars.mtime, 'contacts.json': contacts.mtime, 'schedule-changes.json': changes.mtime },
   };
+  const rows = (Array.isArray(changes.data) ? changes.data : []).map((c, i) => ({ row: i + 1, ...c }));
+  cfg.changes = cleanChanges(rows, { regulars: cfg.regulars, facilities: s.facilities });
+  for (const c of cfg.changes) if (c.problem) log.warn(`[config] schedule change ${c.row}: ${c.problem}`);
   if (!cfg.contacts.some((c) => c.admin)) log.warn('[config] no admin contact set - technical, clash and renewal alerts will have nowhere to go.');
   if (!cfg.contacts.some((c) => c.reminders)) log.warn('[config] nobody has attendant reminders switched on.');
   return cfg;
@@ -221,7 +271,9 @@ export function loadConfig(dir = path.resolve('config')) {
 export function configChanged(cfg) {
   try {
     for (const [file, prev] of Object.entries(cfg._mtimes)) {
-      if (fs.statSync(path.join(cfg._dir, file)).mtimeMs !== prev) return true;
+      const full = path.join(cfg._dir, file);
+      const now = fs.existsSync(full) ? fs.statSync(full).mtimeMs : 0;
+      if (now !== prev) return true;
     }
   } catch { /* a file briefly missing mid-edit: ignore */ }
   return false;

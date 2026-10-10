@@ -1,9 +1,10 @@
 // Google Apps Script version of the Zaria Court booking agent - free to run.
 //
-// Every 5 minutes, on Google's servers: read Ticqet, let the same engine as the
-// Node agent decide what is new, due or wrong, and send email through the
-// Google account that owns the script. Settings, contacts and the booking log
-// live in the Google Sheet the script belongs to.
+// Every 5 minutes, on Google's servers: read Ticqet for every watched facility
+// (the Multi-Purpose Court and the 5-a-side pitches), let the same engine as
+// the Node agent decide what is new, due or wrong, and send email through the
+// Google account that owns the script. Settings, contacts, schedule changes and
+// the booking log live in the Google Sheet the script belongs to.
 //
 // Entry points (called by the global functions at the end of the built Code.gs):
 //   setup()          once: creates the tabs and the 5-minute timer
@@ -14,7 +15,7 @@
 import { Engine } from '../../src/engine.js';
 import { convertSheets } from '../../src/workbook.js';
 import { DEFAULT_SETTINGS, withDefaults, cleanRegulars, cleanContacts, recipients, channelName } from '../../src/config.js';
-import { dateWindow, nowInZone, isoDate } from '../../src/time.js';
+import { dateWindow, nowInZone, isoDate, joinNames } from '../../src/time.js';
 import * as fmt from '../../src/formatter.js';
 import * as store from './store.js';
 import { Props } from './props.js';
@@ -24,9 +25,10 @@ import * as sheets from './sheets.js';
 import { log, recent } from './logger.js';
 
 /* global __ZARIA_DEFAULTS__ */
-// Filled in at build time from the local config: regular clients, and contact
-// names, roles and ticks (never phone numbers). Used only to pre-fill new tabs.
-const PREFILL = typeof __ZARIA_DEFAULTS__ !== 'undefined' ? __ZARIA_DEFAULTS__ : { regulars: [], contacts: [] };
+// Filled in at build time from the local config: regular clients, contact
+// names, roles and ticks (never phone numbers), and schedule changes. Used
+// only to pre-fill new tabs, and the rows of facilities that have none yet.
+const PREFILL = typeof __ZARIA_DEFAULTS__ !== 'undefined' ? __ZARIA_DEFAULTS__ : { regulars: [], contacts: [], changes: [] };
 
 // Here the agent runs every 5 minutes instead of continuously, so it alerts on
 // the first sighting of a change (no settle wait), lets reminders go out up to
@@ -40,19 +42,33 @@ export const BASE_SETTINGS = withDefaults({
 
 const FOOTER = 'Automatic message from the Zaria Court booking system, which checks Ticqet every 5 minutes.';
 
-const ready = (c) => ({ settings: withDefaults(c.settings), regulars: cleanRegulars(c.regulars), contacts: cleanContacts(c.contacts) });
+const ready = (c) => {
+  const settings = withDefaults(c.settings);
+  return { settings, regulars: cleanRegulars(c.regulars, settings.facilities), contacts: cleanContacts(c.contacts) };
+};
 
 // The config from the sheet - or, if the sheet has mistakes, the last good one,
-// so a typo never stops the alerts.
+// so a typo never stops the alerts. Schedule changes always come from the
+// sheet as it is now (a mistake there only affects its own row).
 function loadConfig(ss, props) {
   const res = convertSheets(sheets.readConfigSheets(ss), BASE_SETTINGS);
   if (!res.errors.length) {
     props.set('lastGoodConfig', { settings: res.settings, regulars: res.regulars, contacts: res.contacts });
-    return { cfg: ready(res), errors: [], warnings: res.warnings };
+    return { cfg: { ...ready(res), changes: res.changes }, errors: [], warnings: res.warnings };
   }
   const last = props.get('lastGoodConfig', null);
   if (!last) throw new Error(`The sheet has mistakes and there are no earlier good settings to use: ${res.errors.join(' ')}`);
-  return { cfg: ready(last), errors: res.errors, warnings: res.warnings };
+  return { cfg: { ...ready(last), changes: res.changes }, errors: res.errors, warnings: res.warnings };
+}
+
+// The settings to upgrade the sheet with: the last good ones, else the defaults.
+function lastGoodSettings(props) {
+  const last = props.get('lastGoodConfig', null);
+  try {
+    return last ? withDefaults(last.settings) : BASE_SETTINGS;
+  } catch {
+    return BASE_SETTINGS;
+  }
 }
 
 function makeSender(cfg, previewItems) {
@@ -80,7 +96,7 @@ async function reportConfigErrors(cfg, sender, errors, runtime) {
   for (const to of recipients(cfg, 'admin')) await sender.send({ to, text: fmt.configProblem(errors), kind: 'config-error' });
 }
 
-function statusRows({ cfg, runtime, props, configErrors, warnings, failure }) {
+function statusRows({ cfg, runtime, props, configErrors, warnings, failure, events, changes }) {
   const day = cfg ? isoDate(nowInZone(cfg.settings.timezone)) : '';
   const messages = props.get('jobs', {})[`sent|${day}`] || 0;
   let left = '?';
@@ -91,13 +107,16 @@ function statusRows({ cfg, runtime, props, configErrors, warnings, failure }) {
     ? `NOT READABLE since ${sheets.kigaliStamp(runtime.errorSince)}: ${runtime.lastError || 'unknown error'}`
     : runtime.lastContactAt ? `OK - last read ${sheets.kigaliStamp(runtime.lastContactAt)}` : 'Not read yet';
   const errorsThisRun = recent.filter((r) => r.level === 'ERROR').map((r) => r.text);
+  const upcoming = (cfg ? cfg.changes || [] : []).filter((c) => !c.problem && c.date >= day);
   return [
     ['Last check', sheets.kigaliStamp(new Date())],
     ['Ticqet', ticqet],
     ['Channel', !cfg ? '?' : cfg.settings.channel === 'email' ? 'Email - sending for real' : 'Preview - nothing is sent (see the Preview tab)'],
-    ['Watching', cfg ? `${cfg.settings.court.name}, the next ${cfg.settings.watch.windowDays} days` : '?'],
+    ['Watching', cfg ? `${joinNames(cfg.settings.facilities.map((f) => f.name))} - the next ${cfg.settings.watch.windowDays} days` : '?'],
     ['Messages today', String(messages)],
     ['Emails this Google account can still send today', String(left)],
+    ['Event days ahead (2 weeks)', events.length ? events.join('\n') : 'None'],
+    ['Schedule changes ahead', upcoming.length ? `${upcoming.length} (see the Schedule Changes tab)` : changes ? 'None' : '?'],
     ['Mistakes in the sheet', configErrors.length ? configErrors.join('\n') : 'None'],
     ['Things to check', warnings.length ? warnings.join('\n') : 'None'],
     ['Errors in the last check', failure ? failure.message : errorsThisRun.length ? errorsThisRun.join('\n') : 'None'],
@@ -116,6 +135,7 @@ export async function runAgent() {
   const previewItems = [];
   let cfg = null;
   let source = null;
+  let engine = null;
   let configErrors = [];
   let warnings = [];
   let failure = null;
@@ -123,18 +143,24 @@ export async function runAgent() {
   store.begin(props);
   try {
     runtime.firstRunAt = runtime.firstRunAt || Date.now();
+    // Older sheets get what newer versions need (new tabs, columns, settings
+    // rows, the pitches' Ticqet IDs) before they are read.
+    const upgrade = sheets.upgradeSheet(ss, { settings: lastGoodSettings(props), prefill: PREFILL, props });
+    for (const done of upgrade.done) log.info(`[setup] ${done}`);
+    for (const problem of upgrade.failed) log.error(`[setup] could not update the sheet (${problem}) - the agent carries on`);
     ({ cfg, errors: configErrors, warnings } = loadConfig(ss, props));
-    // Older sheets: split "Attendant reminders" into Reminder 1 and Reminder 2
-    // (same ticks in both, so this run's config is unchanged).
-    if (sheets.upgradeContacts(ss, cfg.settings)) log.info('[setup] Contacts: reminders now have one column each');
     const sender = makeSender(cfg, previewItems);
+
+    source = new TicqetRest({ settings: cfg.settings, http: UrlFetchApp, state: runtime });
+    const ids = source.verify(cfg.settings.facilities);
+    configErrors = [...configErrors, ...ids.errors];
+    warnings = [...warnings, ...ids.warnings];
     await reportConfigErrors(cfg, sender, configErrors, runtime);
 
     const labels = dateWindow(nowInZone(cfg.settings.timezone), cfg.settings.watch.windowDays).map((d) => d.label);
-    source = new TicqetRest({ settings: cfg.settings, http: UrlFetchApp, state: runtime });
-    source.load(labels);
+    source.load(cfg.settings.facilities, labels);
 
-    const engine = new Engine({ cfg, source, sender });
+    engine = new Engine({ cfg, source, sender });
     engine.startedAt = runtime.firstRunAt;
     engine.pending = new Map(runtime.pending || []);
     engine.silence = runtime.silence || { alerted: false, since: null };
@@ -155,9 +181,14 @@ export async function runAgent() {
     };
     safely('write the Bookings Log', () => sheets.appendBookingLog(ss, store.takeBookingLog(), source ? source.createTimes : new Map(), cfg));
     safely('write the Preview tab', () => sheets.appendPreview(ss, previewItems));
+    if (engine) safely('update the Schedule Changes tab', () => sheets.writeChangeStatuses(ss, engine.changeStatus));
     props.set('runtime', runtime);
     safely('save the agent\'s memory', () => props.flush());
-    safely('update the Status tab', () => sheets.writeStatus(ss, statusRows({ cfg, runtime, props, configErrors, warnings, failure })));
+    let events = [];
+    try {
+      events = engine ? engine.upcomingEvents(14) : [];
+    } catch { /* status only */ }
+    safely('update the Status tab', () => sheets.writeStatus(ss, statusRows({ cfg, runtime, props, configErrors, warnings, failure, events, changes: !!engine })));
     lock.releaseLock();
   }
 }

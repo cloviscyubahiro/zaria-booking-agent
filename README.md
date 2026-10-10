@@ -1,6 +1,6 @@
 # Zaria Court booking agent
 
-Watches Zaria Court's **Multi-Purpose Court** schedule on [Ticqet](https://ticqet.rw) around the clock and keeps the team informed: new bookings, cancellations, a morning update, and reminders for the attendants who open the court.
+Watches Zaria Court's schedules on [Ticqet](https://ticqet.rw) around the clock - the **Multi-Purpose Court** and the **5-a-side Pitches A and B** - and keeps the team informed: new bookings, cancellations, a morning update, reminders for the attendants who open the facilities, a notice the day before an event, and one-off schedule changes from the admin (car-free day, Umuganda).
 
 Two ways to run it:
 
@@ -21,7 +21,7 @@ npm run build:apps-script          # writes apps-script/dist/Code.gs
 Get-Content apps-script\dist\Code.gs -Raw | Set-Clipboard    # copies it
 ```
 
-The build pre-fills the new tabs with the regular clients and the contacts' names and roles from `config/` (never phone numbers), so `dist/` stays out of git.
+The build pre-fills the new tabs with the regular clients, the contacts' names and roles (never phone numbers) and any schedule changes from `config/`, so `dist/` stays out of git.
 
 **Install it** (signed in to the Zaria Court Google account):
 
@@ -37,14 +37,38 @@ Ask the team to turn on notifications for that email address, and to mark the fi
 
 | Tab | What it is |
 |---|---|
-| Status | Last check, whether Ticqet can be read, emails sent and left today, mistakes in the sheet |
-| Bookings Log | Every booking the agent sees, with when it was created on Ticqet. Settles "did they book online?" questions |
+| Status | Last check, whether Ticqet can be read, emails sent and left today, event days ahead, mistakes in the sheet |
+| Schedule Changes | One-off changes the admin tells the agent about (see below) |
+| Bookings Log | Every booking the agent sees, per facility, with when it was created on Ticqet. Settles "did they book online?" questions |
 | Contacts, Regular Clients, Settings, Facilities | What the team edits. Changes apply at the next check |
 | Preview | What would have been sent while Channel is *Preview* |
 
+**Facilities:** every facility with *Watch = Yes* and a Ticqet ID is watched (the ID is the code at the end of the facility's link on ticqet.rw). Once a day the agent checks that each ID belongs to the facility named next to it. When a facility is added, its bookings already on Ticqet are noted quietly and everyone gets one email saying it is now covered.
+
 If the sheet has a mistake (say, a mistyped email), the agent keeps using the last good settings, shows the mistake on the Status tab, and emails the admin once.
 
-**Updating the script:** rebuild, open *Extensions > Apps Script*, replace all of `Code.gs` with the new file, save. Nothing else: the tabs, the timer and the agent's memory stay.
+**Updating the script:** rebuild, open *Extensions > Apps Script*, replace all of `Code.gs` with the new file, save. Nothing else: the tabs, the timer and the agent's memory stay. At its next check the agent adds what an older sheet lacks (new tabs, columns and settings rows, the pitches' Ticqet IDs, the regular clients of a facility that has none yet) without touching what the team typed.
+
+### Schedule changes: car-free day, Umuganda, a team not coming
+
+One row per change on the **Schedule Changes** tab:
+
+| Date | Facility | Client | New time | Reason / message | Email everyone |
+|---|---|---|---|---|---|
+| 10/10/2026 | | Local Champions | 12:00-14:00 | Car-free day | tick when ready |
+| 31/10/2026 | 5-a-side Pitch A | Local Champions | Cancelled | Umuganda | |
+| 17/10/2026 | | Local Champions | | Bring your own bibs | |
+| 17/10/2026 | 5-a-side Pitch B | | | Closed 2-4 PM for repairs | |
+
+- **New time** like `12:00-14:00` (or `12-2pm`): the client plays then instead of their usual hours. **Cancelled**: they do not play that day. Empty: just a note (with a client) or a notice for everyone (without).
+- An empty **Facility** means every facility where the client usually plays that day.
+- The agent uses each row straight away: reminders go out for the new hours (none for the usual ones, even if they are still blocked on Ticqet), the daily update explains the change, and the open-slot check does not flag the usual hours.
+- Tick **Email everyone** when the row is ready: it is emailed to everyone within 5 minutes (after quiet hours if ticked at night). Edit it later and it is emailed again as an update.
+- The **Agent status** column says how the agent understood each row (for example *OK: Local Champions play 12:00-2:00 PM instead of 8:00-10:00 AM, at 5-a-side Pitch A and 5-a-side Pitch B. Emailed to 6 people ...*), or what is wrong with it. A mistake affects only its own row.
+
+**Umuganda** (the last Saturday of each month, 8-11 AM by default, *Settings*): it is shown in the daily update, and three days before, the admin gets a list of the sessions booked during it - so there is time to agree a new time and add a row here.
+
+**Event days:** one Ticqet booking of 6 hours or more (*Settings*) is an event or event setup. The day before, after the morning update, the team and the admin get the facility, the hours and the **teams to call**: everyone else booked at that facility that day, and regular clients whose usual hours the event took.
 
 **How it differs from the server version:** it checks every 5 minutes instead of live, so an alert arrives within about 5 minutes of a booking, and reminders may be up to 10 minutes late. Its memory lives in the script's properties, and the booking log in the sheet.
 
@@ -52,14 +76,16 @@ If the sheet has a mistake (say, a mistyped email), the agent keeps using the la
 
 | Message | When | Who (Contacts sheet column) |
 |---|---|---|
-| New booking / cancelled / changed | About 1-2 minutes after it happens on Ticqet. Between 11 PM and 6 AM it waits and is added to the morning update. | New booking alerts = Yes |
-| Daily update | Every morning at 6:30 | Daily & weekly updates = Yes |
+| New booking / cancelled / changed | About 1-2 minutes after it happens on Ticqet (within 5 minutes for the email version), naming the facility. Between 11 PM and 6 AM it waits and is added to the morning update. | New booking alerts = Yes |
+| Daily update | Every morning at 6:30: each facility's sessions, schedule changes, Umuganda | Daily & weekly updates = Yes |
 | Weekly overview | Monday 6:30, instead of that day's daily update | Daily & weekly updates = Yes |
-| Reminders | 60 and 15 minutes before every session, Ticqet or regular client | Reminder 1 (60 min) / Reminder 2 (15 min) = Yes; an older "Attendant reminders" column means both |
+| Reminders | 60 and 15 minutes before every session, Ticqet or regular client. Sessions starting at the same time (say both pitches at 6 PM) share one email | Reminder 1 (60 min) / Reminder 2 (15 min) = Yes; an older "Attendant reminders" column means both |
 | Last-minute booking | A booking that starts within the hour: one message instead of the reminders | Either reminder = Yes |
-| Admin alerts | A booking landing in a regular client's slot (possible double-booking); regular hours still open on Ticqet (each morning); renewal 3 days before a client's Until date; Ticqet unreadable for 15 min (and when it's back); anything unusual | Admin alerts = Yes |
+| Event day | The day before an event or setup (one booking of 6+ hours), with the teams to call; also when such a booking is made | New booking alerts = Yes, and Admin alerts = Yes |
+| Schedule change | When the admin ticks *Email everyone* on the Schedule Changes tab | Everyone |
+| Admin alerts | A booking for part of a regular client's slot, or overlapping it (possible double-booking); regular hours still open on Ticqet (each morning); renewals 3 days before Until dates (one email); sessions booked during Umuganda (3 days before); Ticqet unreadable for 15 min (and when it's back); a mistake in the sheet or a wrong Ticqet ID | Admin alerts = Yes |
 
-Regular clients (booked directly with Zaria) are never announced as new bookings; they appear by name in the updates and reminders.
+Regular clients (booked directly with Zaria) are never announced as new bookings; they appear by name in the updates and reminders. A Ticqet booking that is exactly a regular client's usual hours is Zaria blocking the slot for them, so it is logged without a message.
 
 ## Quick start (Ubuntu server)
 
@@ -87,7 +113,7 @@ npm run check
 npm start          # Ctrl+C to stop
 ```
 
-`npm run check` should end with **"Reading works."** and list the bookings you can see on ticqet.rw. Regular clients are marked `R:<name>`; regular hours that are *not* blocked on Ticqet are flagged with `!`.
+`npm run check` should end with **"Reading works."** and list, for each facility, the bookings you can see on ticqet.rw. Regular clients are marked `R:<name>`, events `E`; regular hours that are *not* blocked on Ticqet are flagged with `!`.
 
 ## Run it 24/7
 
@@ -178,16 +204,16 @@ grep "Monday 05 October 2026" data/bookings-log.jsonl
 
 - **Live connection to Ticqet.** Ticqet runs on Google Firebase. The agent listens to the court's schedule for the next 60 days the same way the Ticqet website does, so changes arrive within seconds and Ticqet's servers are barely loaded. Every 5 minutes it double-checks the connection against the server.
 - **No false alarms.** It waits 60 seconds after a change before alerting (Ticqet sometimes rewrites a booking record), records existing bookings silently when it first sees a date, and ignores data shown while offline - so a network drop can never look like "all bookings cancelled".
-- **Safety limits.** If many bookings vanish at once, only the admin is told (more likely a Ticqet glitch than real cancellations). Many new bookings at once become one summary. A daily message cap (300) stops runaway costs. If Ticqet can't be read for 15 minutes, the admin is told.
+- **Safety limits.** If many bookings vanish at once, only the admin is told (more likely a Ticqet glitch than real cancellations). Many new bookings at once become one summary. A daily message cap (300 on the server, 90 for the email version) stops runaway costs; booking alerts pause first, a third of the way before it, so reminders and updates still go out. If Ticqet can't be read for 15 minutes, the admin is told.
 - **Remembers across restarts** in `data/`: what it has seen and sent, and alerts held overnight.
 
 | Folder | Contents |
 |---|---|
-| `src/` | The agent: `ticqet.js` (reading Ticqet), `engine.js` (decisions), `formatter.js` (all message wording), `email.js` (email layout), `workbook.js` (reading the setup sheet), `senders/` (WhatsApp, SMS, preview) |
-| `apps-script/` | The free Google version: `src/` (reading Ticqet over HTTPS, the sheet, Gmail) and `build.mjs`, which bundles it with `src/` into one `Code.gs` |
+| `src/` | The agent: `ticqet.js` (reading Ticqet), `engine.js` (decisions), `regulars.js` (regular clients and sessions), `changes.js` (the Schedule Changes tab), `facilities.js`, `formatter.js` (all message wording), `email.js` (email layout), `workbook.js` (reading the setup sheet), `senders/` (WhatsApp, SMS, preview) |
+| `apps-script/` | The free Google version: `src/` (reading Ticqet over HTTPS, the sheet and its upgrades, Gmail) and `build.mjs`, which bundles it with `src/` into one `Code.gs` |
 | `tools/` | `npm run config` (workbook to config) and `npm run send-test` |
-| `config/` | `*.example.*` files are committed; your real workbook and JSON files stay on the server only |
-| `test/` | 81 offline tests, including the Google version run against fake Google services: `npm test` |
+| `config/` | `*.example.*` files are committed; your real workbook and JSON files (including `schedule-changes.json`) stay on the server only |
+| `test/` | 122 offline tests, including the Google version run against fake Google services and the upgrade of an existing sheet: `npm test` |
 
 ## Troubleshooting
 
@@ -203,8 +229,9 @@ grep "Monday 05 October 2026" data/bookings-log.jsonl
 
 ## Notes and limits
 
-- **One facility for now.** Only the Multi-Purpose Court is watched. When the 5-a-side pitches reopen, their Ticqet IDs go on the Facilities sheet; watching several facilities at once needs a small code change.
-- **A booking in a regular client's slot** looks the same on Ticqet whether Zaria blocked it for the client or a customer booked it, so the agent asks the admin to check rather than guessing.
+- **Facilities:** the Multi-Purpose Court and 5-a-side Pitches A and B are on the Facilities sheet. The server version watches the facilities it started with; restart it after changing them.
+- **A booking in part of a regular client's slot** looks the same on Ticqet whether Zaria blocked it for the client or a customer booked it, so the agent asks the admin to check rather than guessing. A booking of exactly the client's hours is taken as Zaria's block.
+- **Event days** are recognised by length (one booking of 6+ hours), because Ticqet does not say what a booking is for.
 - **Delivery:** the agent knows Meta (or Pindo) accepted each message, not that the phone received it.
 - **Messages are in English.**
 - The agent reads only Ticqet's public schedule. It's still good practice to let Ticqet know it is running, so they can warn you before changing their system.

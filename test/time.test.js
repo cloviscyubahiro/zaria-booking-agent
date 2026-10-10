@@ -2,8 +2,36 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ticqetLabel, weekdayOf, formatRange, compactRange, dateWindow, clockLabel, shortDate, WEEKDAYS,
-  dayFromLabel, nowInZone, nowAtOffset, zoneSupported,
+  dayFromLabel, nowInZone, nowAtOffset, zoneSupported, addDays, isLastSaturday, joinNames,
 } from '../src/time.js';
+import { resolveFacility, KNOWN_FACILITIES } from '../src/facilities.js';
+
+test('addDays crosses months and gives the Ticqet label', () => {
+  assert.deepEqual(addDays({ y: 2026, m: 10, d: 31 }, 1), { y: 2026, m: 11, d: 1, label: 'Sunday 01 November 2026' });
+  assert.equal(addDays({ y: 2026, m: 10, d: 9 }, 1).label, 'Saturday 10 October 2026');
+});
+
+test('Umuganda is the last Saturday of the month', () => {
+  assert.ok(isLastSaturday(2026, 10, 31));
+  assert.ok(isLastSaturday(2026, 11, 28));
+  assert.ok(isLastSaturday(2026, 12, 26));
+  assert.ok(!isLastSaturday(2026, 10, 24), 'a week earlier');
+  assert.ok(!isLastSaturday(2026, 10, 30), 'a Friday');
+});
+
+test('joinNames reads like English', () => {
+  assert.equal(joinNames(['A']), 'A');
+  assert.equal(joinNames(['A', 'B']), 'A and B');
+  assert.equal(joinNames(['A', 'B', 'C']), 'A, B and C');
+});
+
+test('facility names typed loosely find the right facility', () => {
+  assert.equal(resolveFacility('Pitch A', KNOWN_FACILITIES).ticqetEventId, 'MX9KuPLIoNeBGlskCFba');
+  assert.equal(resolveFacility('5-A-SIDE PITCH (B)', KNOWN_FACILITIES).ticqetEventId, 'lfbaTFIZ2wc1rS5QjbUs');
+  assert.equal(resolveFacility('multi-purpose court', KNOWN_FACILITIES).ticqetEventId, 'wyUcHcKLSP52EBIr9asf');
+  assert.equal(resolveFacility('Pitch', KNOWN_FACILITIES), null, 'which pitch? - unclear');
+  assert.equal(resolveFacility('', KNOWN_FACILITIES), null);
+});
 
 test('ticqetLabel zero-pads the day (the 1st-9th trap)', () => {
   assert.equal(ticqetLabel(2026, 10, 1), 'Thursday 01 October 2026');

@@ -39,37 +39,43 @@ function makeRunner() {
   };
 }
 
-// --check: print what the agent sees on Ticqet for the next 14 days.
+// --check: print what the agent sees on Ticqet for the next 14 days, for every
+// watched facility.
 export async function runCheck(cfg, watcher) {
-  const court = cfg.settings.court.name;
+  const facilities = cfg.settings.facilities;
   const days = dateWindow(nowInZone(cfg.settings.timezone), 14);
   watcher.watch(days.map((d) => d.label));
+  const missing = () => facilities.some((f) => days.some((d) => watcher.get(d.label, f.ticqetEventId) === undefined));
   const deadline = Date.now() + 60000;
-  while (Date.now() < deadline && days.some((d) => watcher.get(d.label) === undefined)) await sleep(1000);
+  while (Date.now() < deadline && missing()) await sleep(1000);
 
-  console.log(`\n${court} on Ticqet - next 14 days (R = regular client)\n`);
   let read = 0;
-  for (const d of days) {
-    const raw = watcher.get(d.label);
-    const head = shortDate(d.y, d.m, d.d).padEnd(11);
-    if (raw === undefined) {
-      console.log(`  ${head} COULD NOT READ`);
-      continue;
+  for (const f of facilities) {
+    console.log(`\n${f.name} on Ticqet - next 14 days (R = regular client, E = event or setup)\n`);
+    for (const d of days) {
+      const raw = watcher.get(d.label, f.ticqetEventId);
+      const head = shortDate(d.y, d.m, d.d).padEnd(11);
+      if (raw === undefined) {
+        console.log(`  ${head} COULD NOT READ`);
+        continue;
+      }
+      read += 1;
+      const date = { y: d.y, m: d.m, d: d.d, label: d.label };
+      const bookings = raw.map((r) => bookingFromDoc(r, date)).sort((a, b) => a.slots[0] - b.slots[0]);
+      const parts = bookings.map((b) => {
+        const reg = matchRegular(b, cfg.regulars, date, f.name, cfg.changes);
+        const kind = cfg.settings.eventMinHours > 0 && b.hours >= cfg.settings.eventMinHours ? ' E' : reg ? ` R:${reg}` : ' online';
+        return b.ranges.map((r) => formatRange(r.startHour, r.endHour)).join(' + ') + kind;
+      });
+      const booked = new Set(bookings.flatMap((b) => b.slots));
+      const open = lapsedRegularHours(cfg.regulars, date, f.name, booked, cfg.changes)
+        .flatMap((lr) => slotsToRanges(lr.openHours).map((r) => `${compactRange(r.startHour, r.endHour)} ${lr.client}`));
+      console.log(`  ${head} ${parts.length ? parts.join(', ') : '-'}${open.length ? `   ! regular hours OPEN on Ticqet: ${open.join(', ')}` : ''}`);
     }
-    read += 1;
-    const date = { y: d.y, m: d.m, d: d.d, label: d.label };
-    const bookings = raw.map((r) => bookingFromDoc(r, date)).sort((a, b) => a.slots[0] - b.slots[0]);
-    const parts = bookings.map((b) => {
-      const reg = matchRegular(b, cfg.regulars, date, court);
-      return b.ranges.map((r) => formatRange(r.startHour, r.endHour)).join(' + ') + (reg ? ` R:${reg}` : ' online');
-    });
-    const booked = new Set(bookings.flatMap((b) => b.slots));
-    const open = lapsedRegularHours(cfg.regulars, date, court, booked)
-      .flatMap((lr) => slotsToRanges(lr.openHours).map((r) => `${compactRange(r.startHour, r.endHour)} ${lr.client}`));
-    console.log(`  ${head} ${parts.length ? parts.join(', ') : '-'}${open.length ? `   ! regular hours OPEN on Ticqet: ${open.join(', ')}` : ''}`);
   }
-  console.log(`\nRead ${read} of ${days.length} days from Ticqet.${read === days.length ? ' Reading works.' : ' Some days could not be read - see the log above.'}\n`);
-  return read === days.length;
+  const all = days.length * facilities.length;
+  console.log(`\nRead ${read} of ${all} facility-days from Ticqet.${read === all ? ' Reading works.' : ' Some could not be read - see the log above.'}\n`);
+  return read === all;
 }
 
 async function main() {
@@ -102,8 +108,11 @@ async function main() {
         engine.sender = sender;
         log.info(`[config] channel is now: ${sender.describe()}`);
       }
-      if (next.settings.court.ticqetEventId !== cfg.settings.court.ticqetEventId) {
-        log.warn('[config] the court\'s Ticqet id changed - restart the agent for that to take effect.');
+      const ids = (s) => s.facilities.map((f) => f.ticqetEventId).join(',');
+      if (ids(next.settings) !== ids(cfg.settings)) {
+        log.warn('[config] the watched facilities changed - restart the agent for that to take effect.');
+        next.settings.facilities = cfg.settings.facilities; // the live listeners still watch the old list
+        next.settings.court = cfg.settings.court;
       }
       cfg = next;
       engine.cfg = cfg;

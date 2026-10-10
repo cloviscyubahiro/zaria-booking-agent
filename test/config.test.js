@@ -2,7 +2,37 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.ZARIA_QUIET = '1';
-const { normalizePhone, normalizeEmail, withDefaults, cleanContacts, recipients, normalizeChannel } = await import('../src/config.js');
+const { normalizePhone, normalizeEmail, withDefaults, cleanContacts, cleanRegulars, recipients, normalizeChannel } = await import('../src/config.js');
+
+const PITCH_A = { name: '5-a-side Pitch A', ticqetEventId: 'MX9KuPLIoNeBGlskCFba' };
+
+test('facilities: older settings name one court; newer ones list several, checked', () => {
+  const old = withDefaults({ court: { name: 'Multi-Purpose Court', ticqetEventId: 'wyUcHcKLSP52EBIr9asf' } });
+  assert.deepEqual(old.facilities, [{ name: 'Multi-Purpose Court', ticqetEventId: 'wyUcHcKLSP52EBIr9asf' }]);
+  const three = withDefaults({ facilities: [{ name: 'Multi-Purpose Court', ticqetEventId: 'wyUcHcKLSP52EBIr9asf' }, PITCH_A] });
+  assert.equal(three.facilities.length, 2);
+  assert.deepEqual(three.court, three.facilities[0], 'the first one is the main one');
+  assert.equal(three.venue.facilities.length, 3, 'all known facilities, for pre-filling');
+  assert.throws(() => withDefaults({ facilities: [PITCH_A, { ...PITCH_A, name: 'Other' }] }), /used for more than one facility/);
+  assert.throws(() => withDefaults({ facilities: [{ name: 'X', ticqetEventId: '' }] }), /needs a name and a Ticqet ID/);
+});
+
+test('event days and Umuganda: defaults and checks', () => {
+  const s = withDefaults({});
+  assert.equal(s.eventMinHours, 6);
+  assert.deepEqual(s.umuganda, { start: '08:00', end: '11:00' });
+  assert.equal(withDefaults({ umuganda: null }).umuganda, null);
+  assert.throws(() => withDefaults({ umuganda: { start: '11:00', end: '08:00' } }), /umuganda/);
+  assert.throws(() => withDefaults({ eventMinHours: 30 }), /eventMinHours/);
+});
+
+test('regular clients: a loosely typed facility name is matched to the watched one', () => {
+  const rows = cleanRegulars([
+    { client: 'KESA', facility: 'Pitch B', day: 'Monday', start: '18:00', end: '19:00' },
+    { client: 'MTN', facility: '', day: 'Tuesday', start: '17:00', end: '19:00' },
+  ], [{ name: 'Multi-Purpose Court', ticqetEventId: 'c' }, PITCH_A, { name: '5-a-side Pitch B', ticqetEventId: 'b' }]);
+  assert.deepEqual(rows.map((r) => r.facility), ['5-a-side Pitch B', 'Multi-Purpose Court']);
+});
 
 test('phone numbers: every way they are typed becomes +250', () => {
   for (const raw of ['0788123456', '788123456', '250788123456', '+250788123456', '078 812 3456', '078-812-3456']) {

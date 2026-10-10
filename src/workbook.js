@@ -1,13 +1,15 @@
 // Turns the setup workbook's sheets into the agent's config: settings, regular
-// clients and contacts. Pure: it is handed the sheets as rows of cell values, so
-// the same checks run for the Excel workbook (tools/xlsx-to-config.js) and for
-// the Google Sheet (apps-script/).
+// clients, contacts and schedule changes. Pure: it is handed the sheets as rows
+// of cell values, so the same checks run for the Excel workbook
+// (tools/xlsx-to-config.js) and for the Google Sheet (apps-script/).
 //
 //   convertSheets([{ sheet: 'Contacts', data: [[...], ...] }, ...], baseSettings)
-//     -> { settings, regulars, contacts, errors, warnings }
+//     -> { settings, regulars, contacts, changes, errors, warnings }
 
 import { DEFAULT_SETTINGS, withDefaults, normalizePhone, normalizeEmail, normalizeChannel } from './config.js';
 import { WEEKDAYS } from './time.js';
+import { resolveFacility, sameName } from './facilities.js';
+import { cleanChanges } from './changes.js';
 
 const pad = (n) => String(n).padStart(2, '0');
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
@@ -89,13 +91,52 @@ const SETTINGS_ROWS = [
   ['max separate alerts', (v, s) => { s.maxAlertsAtOnce = Number(v); }],
   ['max messages per day', (v, s) => { s.maxMessagesPerDay = Number(v); }],
   ['send welcome message', (v, s) => { s.sendWelcome = yes(v); }],
+  ['event day', (v, s) => { s.eventMinHours = str(v) === '' ? 0 : Number(v); }],
+  ['umuganda', (v, s) => { s.umuganda = toSpan(v); }],
 ];
+
+// "08:00-11:00" -> { start: '08:00', end: '11:00' }; empty or "No" -> null.
+function toSpan(v) {
+  const s = str(v);
+  if (!s || /^(no|off|none)$/i.test(s)) return null;
+  const parts = s.split(/\s*(?:-|–|\bto\b)\s*/i);
+  const start = parts.length === 2 ? toHHMM(parts[0]) : null;
+  const end = parts.length === 2 ? toHHMM(parts[1]) : null;
+  if (!start || !end) throw new Error(`"${s}" is not two times like 08:00-11:00.`);
+  return { start, end };
+}
 
 export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
   const byName = new Map(sheets.map((s) => [s.sheet.trim().toLowerCase(), s.data]));
   const errors = [];
   const warnings = [];
   let adminNameFromSheet = null;
+
+  // ---------- Facilities ----------
+  // Every facility with Watch = Yes is watched; the first one is the main one.
+  const overrides = {};
+  const fa = table(byName.get('facilities') || [], ['Facility']);
+  let listedFacilities = null; // every facility on the tab, watched or not
+  if (fa) {
+    const c = { name: fa.col('facility'), id: fa.col('ticqet id', 'ticqet'), watch: fa.col('watch') };
+    listedFacilities = fa.rows.filter(({ r }) => str(r[c.name])).map(({ r }) => ({ name: str(r[c.name]), ticqetEventId: str(r[c.id]) }));
+    const watched = [];
+    for (const { r, excelRow } of fa.rows) {
+      const name = str(r[c.name]);
+      if (!name || !yes(r[c.watch])) continue;
+      const id = str(r[c.id]);
+      if (!id) { warnings.push(`Facilities row ${excelRow} (${name}): not watched until its Ticqet ID is filled in.`); continue; }
+      const twin = watched.find((f) => f.ticqetEventId === id);
+      if (twin) { errors.push(`Facilities row ${excelRow} (${name}): Ticqet ID ${id} is already used by ${twin.name}.`); continue; }
+      if (watched.some((f) => sameName(f.name, name))) { errors.push(`Facilities row ${excelRow}: "${name}" is listed twice.`); continue; }
+      watched.push({ name, ticqetEventId: id });
+    }
+    if (watched.length) {
+      overrides.facilities = watched;
+      overrides.court = watched[0];
+    } else warnings.push('Facilities: no facility has Watch = Yes with a Ticqet ID - keeping the current ones.');
+  }
+  const watchedNow = overrides.facilities || baseSettings.facilities || [baseSettings.court].filter(Boolean);
 
   // ---------- Regular Clients ----------
   const regulars = [];
@@ -122,9 +163,20 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       if (from === undefined || until === undefined) { errors.push(`${where}: From/Until must be dates (DD/MM/YYYY).`); continue; }
       if (from && until && until < from) { errors.push(`${where}: Until is before From.`); continue; }
       if (!from || !until) missingDates += 1;
+      // The facility as written on the Facilities tab ("Pitch A" -> "5-a-side Pitch A").
+      const typed = str(r[c.facility]);
+      let facility = watchedNow[0]?.name || baseSettings.court?.name || 'Multi-Purpose Court';
+      if (typed) {
+        const known = resolveFacility(typed, listedFacilities || watchedNow) || resolveFacility(typed, watchedNow);
+        if (known) facility = known.name;
+        else {
+          facility = typed;
+          warnings.push(`${where}: facility "${typed}" is not on the Facilities tab - this row is not used.`);
+        }
+      }
       regulars.push({
         client,
-        facility: str(r[c.facility]) || baseSettings.court?.name || 'Multi-Purpose Court',
+        facility,
         day, start, end,
         type: str(r[c.type]) || null,
         from: from || null,
@@ -135,8 +187,8 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       for (let j = i + 1; j < regulars.length; j++) {
         const a = regulars[i];
         const b = regulars[j];
-        if (a.facility === b.facility && a.day === b.day && a.start < b.end && b.start < a.end) {
-          warnings.push(`${a.client} and ${b.client} overlap on ${a.day} (${a.start}-${a.end} / ${b.start}-${b.end}).`);
+        if (sameName(a.facility, b.facility) && a.day === b.day && a.start < b.end && b.start < a.end) {
+          warnings.push(`${a.client} and ${b.client} overlap on ${a.day} at ${a.facility} (${a.start}-${a.end} / ${b.start}-${b.end}).`);
         }
       }
     }
@@ -203,7 +255,6 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
   }
 
   // ---------- Settings ----------
-  const overrides = {};
   const st = table(byName.get('settings') || [], ['Setting']);
   if (!st) warnings.push('Sheet "Settings" not found - keeping current settings.');
   else {
@@ -215,19 +266,6 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       if (!rule) continue;
       try { rule[1](r[cv], overrides); } catch (e) { errors.push(`Settings row ${excelRow}: ${e.message}`); }
     }
-  }
-
-  // ---------- Facilities ----------
-  const fa = table(byName.get('facilities') || [], ['Facility']);
-  if (fa) {
-    const c = { name: fa.col('facility'), id: fa.col('ticqet id', 'ticqet'), watch: fa.col('watch') };
-    const watched = fa.rows.filter(({ r }) => str(r[c.name]) && yes(r[c.watch]));
-    if (watched.length > 1) errors.push('Facilities: only one facility can have Watch = Yes in this version of the agent.');
-    else if (watched.length === 1) {
-      const { r, excelRow } = watched[0];
-      if (!str(r[c.id])) errors.push(`Facilities row ${excelRow}: Watch is Yes but the Ticqet ID is empty.`);
-      else overrides.court = { name: str(r[c.name]), ticqetEventId: str(r[c.id]) };
-    } else warnings.push('Facilities: no facility has Watch = Yes - keeping the current court.');
   }
 
   if (adminNameFromSheet) overrides.adminName = adminNameFromSheet;
@@ -269,5 +307,34 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
     });
   }
 
-  return { settings, regulars, contacts, errors, warnings };
+  // ---------- Schedule Changes ----------
+  // A mistake in one row only affects that row: it is reported, not fatal.
+  const changes = [];
+  let changeRows = null; // as typed, for config/schedule-changes.json
+  const sc = table(byName.get('schedule changes') || [], ['Date']);
+  if (sc) {
+    const c = {
+      date: sc.col('date'), facility: sc.col('facility'), client: sc.col('client'),
+      newTime: sc.col('new time'), reason: sc.col('reason', 'message'), email: sc.col('email'),
+    };
+    const cell = (r, i) => (i >= 0 ? r[i] : '');
+    const rows = sc.rows.map(({ r, excelRow }) => ({
+      row: excelRow,
+      date: toISODate(cell(r, c.date)),
+      facility: cell(r, c.facility),
+      client: cell(r, c.client),
+      newTime: cell(r, c.newTime),
+      reason: cell(r, c.reason),
+      email: cell(r, c.email),
+    }));
+    for (const x of cleanChanges(rows, { regulars, facilities: settings ? settings.facilities : watchedNow })) {
+      changes.push(x);
+      if (x.problem) warnings.push(`Schedule Changes row ${x.row}: ${x.problem}`);
+    }
+    changeRows = rows
+      .filter((x) => x.date || str(x.client) || str(x.reason) || str(x.newTime))
+      .map(({ row, ...x }) => ({ ...x, facility: str(x.facility), client: str(x.client), newTime: str(x.newTime), reason: str(x.reason), email: yes(x.email) }));
+  }
+
+  return { settings, regulars, contacts, changes, changeRows, errors, warnings };
 }

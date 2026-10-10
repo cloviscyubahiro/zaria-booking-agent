@@ -90,6 +90,53 @@ test('Google Sheet contacts: a column per reminder, and a warning if one has nob
   assert.ok(!res.warnings.some((w) => /Reminder 1/.test(w)));
 });
 
+test('Facilities: every facility with Watch = Yes is watched; a missing ID is a warning, not a stop', () => {
+  const sheets = googleSheet({ contacts: [['Clovis', 'Admin', 'clovis@example.com', 'No', 'No', 'No', 'Yes']] });
+  sheets.push({ sheet: 'Facilities', data: [
+    ['Facilities on Ticqet'], ['Every facility with Watch = Yes is watched.'],
+    ['Facility', 'Ticqet ID', 'Watch', 'Notes'],
+    ['Multi-Purpose Court', 'wyUcHcKLSP52EBIr9asf', 'Yes', ''],
+    ['5-a-side Pitch A', 'MX9KuPLIoNeBGlskCFba', 'Yes', ''],
+    ['5-a-side Pitch B', 'lfbaTFIZ2wc1rS5QjbUs', 'Yes', ''],
+    ['Swimming pool', '', 'Yes', 'Not on Ticqet yet'],
+  ] });
+  sheets[1].data.push(['KESA', 'Pitch B', 'Monday', '18:00', '19:00', 'Monthly', '09/10/2026', '31/10/2026']);
+  sheets[1].data.push(['Ghost', 'Pitch Z', 'Monday', '18:00', '19:00', 'Monthly', '', '']);
+  sheets[2].data.push(['Event day: one booking of at least (hours)', '8'], ['Umuganda (last Saturday of the month)', '07:00-10:00']);
+  const res = convertSheets(sheets);
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.settings.facilities.map((f) => f.name), ['Multi-Purpose Court', '5-a-side Pitch A', '5-a-side Pitch B']);
+  assert.equal(res.settings.court.name, 'Multi-Purpose Court');
+  assert.equal(res.settings.eventMinHours, 8);
+  assert.deepEqual(res.settings.umuganda, { start: '07:00', end: '10:00' });
+  assert.equal(res.regulars.find((r) => r.client === 'KESA').facility, '5-a-side Pitch B', '"Pitch B" means 5-a-side Pitch B');
+  assert.ok(res.warnings.some((w) => /Swimming pool\): not watched until its Ticqet ID is filled in/.test(w)), res.warnings.join('\n'));
+  assert.ok(res.warnings.some((w) => /\(Ghost\): facility "Pitch Z" is not on the Facilities tab/.test(w)), res.warnings.join('\n'));
+
+  const off = convertSheets([...sheets.slice(0, 2), { sheet: 'Settings', data: [['Setting', 'Value'], ['Umuganda', 'No'], ['Event day', '0']] }]);
+  assert.equal(off.settings.umuganda, null);
+  assert.equal(off.settings.eventMinHours, 0);
+});
+
+test('Schedule Changes: rows become changes, a mistake stays in its row', () => {
+  const sheets = googleSheet({ contacts: [['Clovis', 'Admin', 'clovis@example.com', 'No', 'No', 'No', 'Yes']] });
+  sheets.push({ sheet: 'Schedule Changes', data: [
+    ['Schedule changes'], ['For one-off changes...'], [],
+    ['Date', 'Facility', 'Client', 'New time', 'Reason / message', 'Email everyone', 'Agent status'],
+    ['2026-10-13', '', 'MTN', '18:00-20:00', 'Car-free day', true, 'old status'],
+    ['13/10/2026', '', 'Unknown FC', 'Cancelled', 'x', false, ''],
+    ['', '', '', '', '', false, ''],
+  ] });
+  const res = convertSheets(sheets);
+  assert.deepEqual(res.errors, [], 'never fatal');
+  assert.equal(res.changes.length, 2);
+  assert.deepEqual([res.changes[0].row, res.changes[0].kind, res.changes[0].email, res.changes[0].summary],
+    [5, 'moved', true, 'MTN play 6:00-8:00 PM instead of 5:00-7:00 PM, at Multi-Purpose Court.']);
+  assert.match(res.changes[1].problem, /Unknown FC has no usual session on Tue 13 Oct to cancel/);
+  assert.ok(res.warnings.some((w) => /^Schedule Changes row 6: Unknown FC/.test(w)));
+  assert.deepEqual(res.changeRows[0], { date: '2026-10-13', facility: '', client: 'MTN', newTime: '18:00-20:00', reason: 'Car-free day', email: true });
+});
+
 test('Google Sheet contacts: a bad or repeated email is an error naming the row', () => {
   const res = convertSheets(googleSheet({ contacts: [
     ['Alex', 'Attendant', 'alex@gmail', 'Yes', 'Yes', 'Yes', 'No'],

@@ -89,6 +89,29 @@ export function dateWindow(start, days) {
   return out;
 }
 
+// The calendar date `n` days after { y, m, d }, with its Ticqet label.
+export function addDays(date, n) {
+  const t = new Date(Date.UTC(date.y, date.m - 1, date.d + n));
+  const y = t.getUTCFullYear();
+  const m = t.getUTCMonth() + 1;
+  const d = t.getUTCDate();
+  return { y, m, d, label: ticqetLabel(y, m, d) };
+}
+
+// Is this the last Saturday of its month? In Rwanda that is Umuganda, the
+// monthly community work morning.
+export function isLastSaturday(y, m, d) {
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return weekdayOf(y, m, d) === 6 && d + 7 > daysInMonth;
+}
+
+// "A", "A and B", "A, B and C".
+export function joinNames(names) {
+  const list = [...names];
+  if (list.length <= 1) return list.join('');
+  return `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`;
+}
+
 // "HH:MM" -> minutes since midnight.
 export function hhmmToMinutes(hhmm) {
   const [h, m] = String(hhmm).split(':').map(Number);

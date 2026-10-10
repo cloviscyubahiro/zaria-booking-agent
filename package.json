@@ -1,7 +1,7 @@
 {
   "name": "zaria-booking-agent",
   "version": "1.0.0",
-  "description": "Watches Zaria Court's Multi-Purpose Court bookings on Ticqet (ticqet.rw) and alerts staff by email (free, Google Apps Script), WhatsApp or SMS.",
+  "description": "Watches Zaria Court's bookings on Ticqet (ticqet.rw) - the Multi-Purpose Court and the 5-a-side pitches - and alerts staff by email (free, Google Apps Script), WhatsApp or SMS.",
   "type": "module",
   "private": true,
   "license": "UNLICENSED",

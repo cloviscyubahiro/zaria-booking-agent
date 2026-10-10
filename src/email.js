@@ -8,7 +8,7 @@ import { HEAD } from './formatter.js';
 // Messages that list several things: their subject is just the title.
 const LIST_KINDS = new Set([
   'daily', 'weekly', 'overnight', 'bookings-digest', 'admin-overnight', 'open-regular-slots',
-  'regular-slot-check', 'welcome', 'test', 'config-error',
+  'regular-slot-check', 'welcome', 'test', 'config-error', 'umuganda', 'facilities-added',
 ]);
 
 const NAVY = '#093254'; // Zaria Court navy, as on the setup workbook headers
@@ -21,7 +21,7 @@ export function toEmail(text, { kind = '', courtName = '', footer = 'Automatic m
   const lines = String(text).split('\n').map((s) => s.trim()).filter(Boolean);
   const title = (lines.shift() || 'Update').replace(new RegExp(`^${HEAD}:\\s*`, 'i'), '') || 'Update';
   const key = lines.find((l) => l !== courtName);
-  const subject = LIST_KINDS.has(kind) || !key ? title : `${title}: ${key.replace(/\.$/, '')}`;
+  const subject = LIST_KINDS.has(kind) || !key ? title : `${title}: ${key.replace(/[.:]$/, '')}`;
 
   const textBody = [title, ...lines, '', '--', footer].join('\n');
   const para = (l) => {

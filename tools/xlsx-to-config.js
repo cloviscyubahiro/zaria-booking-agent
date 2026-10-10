@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Turns the Excel setup workbook into the agent's three config files:
+// Turns the Excel setup workbook into the agent's config files:
 //   config/settings.json, config/regular-clients.json, config/contacts.json
+//   (+ config/schedule-changes.json if the workbook has a "Schedule Changes" sheet)
 //
 //   npm run config                         reads config/zaria-setup.xlsx
 //   npm run config -- path/to/file.xlsx    reads another file
@@ -36,7 +37,7 @@ async function main() {
     const clients = [...new Set(res.regulars.map((r) => r.client))];
     console.log(`  Regular clients: ${res.regulars.length} rows (${clients.join(', ') || 'none'})`);
     console.log(`  Contacts: ${res.contacts.length} numbers - ${res.contacts.filter((x) => x.reminders).length} attendant(s), ${res.contacts.filter((x) => x.admin).length} admin`);
-    console.log(`  Channel: ${res.settings.channel}   Court: ${res.settings.court.name}`);
+    console.log(`  Channel: ${res.settings.channel}   Watching: ${res.settings.facilities.map((f) => f.name).join(', ')}`);
   }
   if (res.warnings.length) {
     console.log('\nWarnings:');
@@ -52,7 +53,8 @@ async function main() {
   fs.writeFileSync('config/settings.json', `${JSON.stringify(res.settings, null, 2)}\n`);
   fs.writeFileSync('config/regular-clients.json', `${JSON.stringify(res.regulars, null, 2)}\n`);
   fs.writeFileSync('config/contacts.json', `${JSON.stringify(res.contacts, null, 2)}\n`);
-  console.log('\nWrote config/settings.json, config/regular-clients.json, config/contacts.json');
+  if (res.changeRows) fs.writeFileSync('config/schedule-changes.json', `${JSON.stringify(res.changeRows, null, 2)}\n`);
+  console.log(`\nWrote config/settings.json, config/regular-clients.json, config/contacts.json${res.changeRows ? ', config/schedule-changes.json' : ''}`);
   console.log('A running agent picks this up within a minute.\n');
 }
 

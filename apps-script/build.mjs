@@ -5,8 +5,9 @@
 // It bundles the shared agent code (src/) with the Apps Script parts
 // (apps-script/src/), swapping the Node-only modules (files, logging) for their
 // Apps Script versions. New tabs are pre-filled from the local config:
-// regular clients, and contact names, roles, emails and ticks - never phone
-// numbers. Because of those names and emails, dist/ is not committed to git.
+// regular clients, contact names, roles, emails and ticks - never phone
+// numbers - and schedule changes. Because of those names and emails, dist/ is
+// not committed to git.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -40,7 +41,8 @@ function sendTestEmail() { return ZariaAgent.sendTestEmail(); }
 function onOpen(e) { return ZariaAgent.onOpen(e); }
 `;
 
-// Regular clients and contacts (names, roles, emails, ticks) from the local config.
+// Regular clients, contacts (names, roles, emails, ticks) and schedule changes
+// from the local config.
 export function localDefaults(dir = path.join(root, 'config')) {
   const read = (f) => {
     try {
@@ -53,13 +55,18 @@ export function localDefaults(dir = path.join(root, 'config')) {
   const contacts = (read('contacts.json') || []).map((c) => ({
     name: c.name || '', role: c.role || '', email: c.email || '',
     alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin,
+    ...(c.reminder1 !== undefined ? { reminder1: !!c.reminder1, reminder2: !!c.reminder2 } : {}),
   }));
   const settings = read('settings.json') || {};
   if (!contacts.some((c) => c.admin)) {
     const name = settings.adminName && settings.adminName !== 'the admin' ? settings.adminName : '';
     contacts.push({ name, role: 'Admin', alerts: false, summaries: false, reminders: false, admin: true });
   }
-  return { regulars, contacts };
+  const changes = (read('schedule-changes.json') || []).map((c) => ({
+    date: c.date || '', facility: c.facility || '', client: c.client || '',
+    newTime: c.newTime || '', reason: c.reason || '', email: !!c.email,
+  }));
+  return { regulars, contacts, changes };
 }
 
 const swapNodeModules = {
@@ -105,6 +112,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   const code = await buildAppsScript({ defaults });
   console.log(`Built ${path.relative(root, OUTFILE)} (${Math.round(code.length / 1024)} KB)`);
   const withEmail = defaults.contacts.filter((c) => c.email).length;
-  console.log(`  pre-fill: ${defaults.regulars.length} regular client rows, ${defaults.contacts.length} contacts (${withEmail} with email; never phone numbers)`);
+  const places = [...new Set(defaults.regulars.map((r) => r.facility))].join(', ');
+  console.log(`  pre-fill: ${defaults.regulars.length} regular client rows (${places}), ${defaults.contacts.length} contacts (${withEmail} with email; never phone numbers), ${defaults.changes.length} schedule change(s)`);
   console.log('Paste it into the Apps Script editor (README > "Email alerts, free").');
 }

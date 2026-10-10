@@ -14,23 +14,35 @@ export function begin(p) {
   logEntries.length = 0;
 }
 
-// --- bookings already processed, per Ticqet date label ---
-// Stored compactly as label -> [[id, [slots...]], ...]; that is all the engine
-// compares, and it keeps a 60-day window well inside the storage limits.
+// --- bookings already processed, per facility and Ticqet date label ---
+// Stored compactly as facilityId -> label -> [[id, [slots...]], ...]; that is
+// all the engine compares, and it keeps 60 days of three facilities well inside
+// the storage limits. Snapshots from before several facilities were watched
+// (label -> [...]) are returned as they are; the engine assigns them.
+const toBookings = (days) => {
+  const out = {};
+  for (const [label, list] of Object.entries(days || {})) {
+    const date = dayFromLabel(label);
+    if (date) out[label] = list.map(([id, slots]) => bookingFromDoc({ id, seats: slots.map(String) }, date));
+  }
+  return out;
+};
+
 export function loadSnapshot() {
   const compact = props.get('snapshot', null);
+  if (!compact || !compact.days) return { days: {} };
+  if (compact.v !== 2) return { days: toBookings(compact.days) };
   const days = {};
-  for (const [label, list] of Object.entries((compact && compact.days) || {})) {
-    const date = dayFromLabel(label);
-    if (!date) continue;
-    days[label] = list.map(([id, slots]) => bookingFromDoc({ id, seats: slots.map(String) }, date));
-  }
+  for (const [fid, labels] of Object.entries(compact.days)) days[fid] = toBookings(labels);
   return { days };
 }
 export function saveSnapshot(snap) {
   const days = {};
-  for (const [label, list] of Object.entries(snap.days)) days[label] = list.map((b) => [b.id, b.slots]);
-  props.set('snapshot', { days });
+  for (const [fid, labels] of Object.entries(snap.days)) {
+    days[fid] = {};
+    for (const [label, list] of Object.entries(labels)) days[fid][label] = list.map((b) => [b.id, b.slots]);
+  }
+  props.set('snapshot', { v: 2, days });
 }
 
 // --- reminder flags already sent ---
