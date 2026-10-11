@@ -97,6 +97,26 @@ test('mistakes in a row are explained, and only that row is skipped', () => {
   assert.equal(res.length, 7, 'the empty row is ignored');
 });
 
+test('rows without a client: a car-free day, and a booking made by mistake to ignore', () => {
+  const [cf, cf2, ig, ...bad] = clean([
+    { date: '2026-10-18', reason: 'Car-free day' },
+    { date: '2026-10-18', newTime: '07:00-11:00', reason: 'Car free day - roads closed until 11', email: true },
+    { date: '2026-10-18', facility: 'Court', newTime: '10:00-12:00', reason: 'Ignore - booked by mistake', email: true },
+    { date: '2026-10-18', newTime: '10:00-12:00', reason: 'Ignore' },
+    { date: '2026-10-18', facility: 'Court', reason: 'Ignore this booking' },
+    { date: '2026-10-18', newTime: 'Cancelled', reason: 'Car-free day' },
+  ]);
+  assert.deepEqual([cf.kind, cf.facility, cf.startHour, cf.problem], ['carfree', null, undefined, undefined]);
+  assert.deepEqual([cf2.kind, cf2.startHour, cf2.endHour, cf2.email], ['carfree', 7, 11, true]);
+  assert.deepEqual([ig.kind, ig.facility, ig.startHour, ig.endHour, ig.email], ['ignore', 'Multi-Purpose Court', 10, 12, false], 'never emailed');
+  assert.match(bad[0].problem, /Choose the Facility of the booking to ignore/);
+  assert.match(bad[1].problem, /Write the hours of the booking to ignore in New time/);
+  assert.match(bad[2].problem, /car-free day, leave New time empty/);
+  // A client's row that mentions car-free day is still that client's change.
+  const [moved] = clean([{ date: '2026-10-10', client: 'Local Champions', newTime: '12:00-14:00', reason: 'Car-free day' }]);
+  assert.equal(moved.kind, 'moved');
+});
+
 test('the same row keeps its id when edited, so a re-send says "Updated"', () => {
   const [a] = clean([{ date: '2026-10-10', client: 'Local Champions', newTime: '12-14', reason: 'Car-free day' }]);
   const [b] = clean([{ date: '2026-10-10', client: 'Local Champions', newTime: '13-15', reason: 'Car-free day' }]);

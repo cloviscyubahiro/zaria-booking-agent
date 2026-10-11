@@ -267,9 +267,10 @@ test('setup creates the tabs and the 5-minute timer; the first check is silent',
   assert.deepEqual(contacts[4], ['Jimmy', 'Operations', '', true, true, false, false, false]);
   assert.deepEqual(contacts[5].slice(0, 7), ['Alex', 'Attendant', '', true, true, true, true]);
   assert.equal(g.sheet('Settings').get(g.sheet('Settings').find('Channel'), 2), 'Preview');
-  assert.deepEqual(g.sheet('Settings').rows().slice(-2).map((r) => r.slice(0, 2)), [
+  assert.deepEqual(g.sheet('Settings').rows().slice(-3).map((r) => r.slice(0, 2)), [
     ['Event day: one booking of at least (hours)', '6'],
     ['Umuganda (last Saturday of the month)', '08:00-11:00'],
+    ['Car-free day hours', '07:00-10:00'],
   ]);
   assert.deepEqual(g.sheet('Facilities').rows().slice(3).map((r) => r.slice(0, 3)), [
     ['Multi-Purpose Court', COURT, 'Yes'],
@@ -560,9 +561,10 @@ test('the sheet the court-only version made is upgraded in place, and the pitche
     ['5-a-side Pitch B', PITCH_B, 'Yes', ''],
   ]);
   assert.match(g.sheet('Facilities').get(2, 1), /^Every facility with Watch = Yes is watched/);
-  assert.deepEqual(g.sheet('Settings').rows().slice(-2).map((r) => r.slice(0, 2)), [
+  assert.deepEqual(g.sheet('Settings').rows().slice(-3).map((r) => r.slice(0, 2)), [
     ['Event day: one booking of at least (hours)', '6'],
     ['Umuganda (last Saturday of the month)', '08:00-11:00'],
+    ['Car-free day hours', '07:00-10:00'],
   ]);
   assert.equal(g.sheet('Settings').get(4, 2), 'Email', 'the channel is kept');
   const log = g.sheet('Bookings Log').rows();
@@ -592,7 +594,13 @@ test('the sheet the court-only version made is upgraded in place, and the pitche
   assert.deepEqual(to(event), ['alex@gmail.com', 'clovis@gmail.com', 'jimmy@zaria.rw']);
   assert.equal(event[0].subject, 'Event tomorrow, Sun 11 Oct: Multi-Purpose Court: booked 7:00-10:00 AM + 12:00 PM-12:00 AM (15 hrs) for an event or setup');
   assert.match(event[0].body, /Please call these teams - Multi-Purpose Court is not available tomorrow:\n10:00 AM-12:00 PM Ticqet booking/);
-  assert.equal(g.sent.length, 6);
+  // Today's event (7 AM-midnight) was never reminded by the old version: the
+  // people who open the court get one "event today" message instead.
+  const today = g.sent.filter((m) => /^Event today/.test(m.subject));
+  assert.deepEqual(to(today), ['alex@gmail.com', 'jimmy@zaria.rw']);
+  assert.equal(today[0].subject, 'Event today, Sat 10 Oct: Multi-Purpose Court is booked 7:00 AM-12:00 AM for an event or setup');
+  assert.match(today[0].body, /It has started - please make sure it is open\./);
+  assert.equal(g.sent.length, 8);
   assert.equal(g.sheet('Schedule Changes').get(5, 7), 'OK: LOCAL CHAMPIONS play 12:00-2:00 PM instead of 8:00-10:00 AM, at 5-a-side Pitch A and 5-a-side Pitch B. Not emailed (tick Email everyone to send it).');
   g.clearSent();
 
@@ -617,6 +625,39 @@ test('the sheet the court-only version made is upgraded in place, and the pitche
   assert.equal(reminders[0].subject, 'Reminder: Today 12:00 PM: 5-a-side Pitch A and 5-a-side Pitch B');
   assert.match(reminders[0].body, /5-a-side Pitch A, 12:00-2:00 PM: LOCAL CHAMPIONS \(regular client\) - moved from 8:00-10:00 AM \(Car-free day\)\./);
   assert.ok(!g.sent.some((m) => /8:00-10:00 AM: LOCAL CHAMPIONS/.test(m.body)), 'nothing for the usual morning hours');
+});
+
+test('a new version adds its Schedule Changes rows (bookings to ignore) once; a row the team deletes stays deleted', async () => {
+  const g = makeGoogle('2026-10-11T10:00:00Z'); // Sun 11 Oct, noon in Kigali
+  for (const label of ['Sunday 18 October 2026', 'Sunday 25 October 2026']) g.ticqet.add(label, `stray-${label.slice(7, 9)}`, ['10', '11'], '2026-08-20T10:07:00Z');
+  vm.runInContext(code, g.context);
+  await g.run('setup');
+  const tab = g.sheet('Schedule Changes');
+  tab.set(2, 1, 'For one-off changes: car-free day, Umuganda, an event, a team not coming. New time like 12:00-14:00, or Cancelled; leave it empty for a note. Tick Email everyone when the row is ready - the agent emails it within 5 minutes and uses it in reminders and the daily update.');
+  assert.equal(tab.getLastRow(), 304, 'the empty rows have checkboxes');
+
+  // The admin pastes the new version.
+  const ignore = (date) => ({ date, facility: 'Multi-Purpose Court', client: '', newTime: '10:00-12:00', reason: 'Ignore - booked by mistake, Ticqet will delete it', email: false });
+  const next = await buildAppsScript({ defaults: { ...DEFAULTS, changes: [...DEFAULTS.changes, ignore('2026-10-18'), ignore('2026-10-25')] }, write: false });
+  vm.runInContext(next, g.context);
+  g.at('2026-10-11T10:05:00Z');
+  await g.run('runAgent');
+  assert.match(tab.get(2, 1), /^One-off changes\. .*"Ignore" in the message/, 'the note explains the new rows');
+  assert.deepEqual(tab.rows().slice(4, 6).map((r) => r.slice(0, 6)), [
+    ['2026-10-18', 'Multi-Purpose Court', '', '10:00-12:00', 'Ignore - booked by mistake, Ticqet will delete it', false],
+    ['2026-10-25', 'Multi-Purpose Court', '', '10:00-12:00', 'Ignore - booked by mistake, Ticqet will delete it', false],
+  ], 'right under the header, not below the checkboxes');
+  assert.equal(tab.get(5, 7), 'OK: Ignoring the 10:00 AM-12:00 PM booking at Multi-Purpose Court: no alerts, no reminders, not in the daily update, and no message when Ticqet removes it. Never emailed.');
+
+  // The team deletes one row; Ticqet deletes both bookings: nobody is told.
+  tab.deleteRows(6, 1);
+  g.ticqet.remove('Sunday 18 October 2026', 'stray-18');
+  g.at('2026-10-11T10:10:00Z');
+  await g.run('runAgent');
+  assert.equal(tab.find('2026-10-25'), 0, 'not added again');
+  assert.match(tab.get(5, 7), /^OK: The ignored 10:00 AM-12:00 PM booking at Multi-Purpose Court has been removed from Ticqet/);
+  assert.equal(g.sent.filter((m) => m.subject.startsWith('Booking cancelled')).length, 0);
+  assert.ok(g.sheet('Bookings Log').rows().some((r) => /^Cancelled \/ freed - ignored \(Schedule Changes\), nobody told$/.test(r[1])));
 });
 
 test('a sheet change that fails (say, a protected range) is reported, and the agent carries on', async () => {

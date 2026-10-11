@@ -5,16 +5,27 @@
 //   31/10/2026             Local Champions  Cancelled    Umuganda         -> not playing
 //   10/10/2026             Local Champions               Bring bibs       -> a note about them
 //   10/10/2026  Pitch A                                  Closed 2-4 PM    -> a notice for everyone
+//   18/10/2026                                           Car-free day     -> a car-free day (7-10 AM)
+//   18/10/2026  Court                       10:00-12:00  Ignore - mistake -> a booking to ignore
 //
 // An empty Facility means every facility where the client usually plays that
-// day. The agent uses the changes in reminders, the daily update and the
-// open-slot check (regulars.js), and emails a row to everyone when it is ticked.
+// day (for a car-free day: every facility). The agent uses the changes in
+// reminders, the daily update and the open-slot check (regulars.js), and emails
+// a row to everyone when it is ticked - except a booking to ignore, which is
+// never emailed.
 
 import { formatRange, joinNames, shortDate, dayFromIso } from './time.js';
 import { resolveFacility } from './facilities.js';
 import { baseRegularsForDate } from './regulars.js';
 
 const CANCELLED = /^(cancel+ed|cancel|off|no session|no play|not playing|not coming|none|closed)\b/i;
+// Rows without a client: "Car-free day ..." marks a car-free day; a message
+// with the word "Ignore" and the hours in New time is a booking to ignore.
+const CAR_FREE = /^car[\s-]*free\b/i;
+const IGNORE = /\bignore\b/i;
+
+// What follows "Car-free day" in the message: "Car-free day - roads closed" -> "roads closed".
+export const carFreeExtra = (reason) => String(reason || '').replace(/^car[\s-]*free(?:[\s-]*(?:day|sunday))?[\s.,:;-]*/i, '').trim();
 
 // "12", "12:00", "12h", "12h00", "12.00", "12pm", "12:00 PM" -> { h, min, mer: 'a'|'p'|null }
 function parseClock(text) {
@@ -148,8 +159,17 @@ export function cleanChanges(rows, { regulars = [], facilities = [] } = {}) {
     let kind = parsed.kind;
     let summary;
     let client = clientText || null;
-    if (!client) {
-      if (kind !== 'note') { fail('Choose the Client whose time changes (or leave New time empty for a notice).'); continue; }
+    if (!client && CAR_FREE.test(reason)) {
+      if (kind === 'cancelled') { fail('For a car-free day, leave New time empty (usual hours) or write its hours, like 07:00-10:00.'); continue; }
+      kind = 'carfree';
+      summary = `Car-free day${facility ? ` at ${facility}` : ''}.`; // the engine adds the hours
+    } else if (!client && IGNORE.test(reason)) {
+      if (!facility) { fail('Choose the Facility of the booking to ignore.'); continue; }
+      if (kind !== 'moved') { fail('Write the hours of the booking to ignore in New time, like 10:00-12:00.'); continue; }
+      kind = 'ignore';
+      summary = `Ignore the ${formatRange(parsed.startHour, parsed.endHour)} booking at ${facility}.`;
+    } else if (!client) {
+      if (kind !== 'note') { fail('Choose the Client whose time changes (or leave New time empty for a notice). To ignore a booking made by mistake, write Ignore in Reason / message.'); continue; }
       if (!reason) { fail('Write the message in the Reason / message column.'); continue; }
       kind = 'notice';
       summary = `Notice${facility ? ` about ${facility}` : ''}, shown in the daily update.`;
@@ -172,10 +192,11 @@ export function cleanChanges(rows, { regulars = [], facilities = [] } = {}) {
     const what = [entry.date, facility || '', (client || '').toLowerCase(), kind, parsed.startHour ?? '', parsed.endHour ?? '', reason].join('|');
     out.push({
       ...entry,
+      email: kind === 'ignore' ? false : email,
       facility,
       client,
       kind,
-      ...(kind === 'moved' ? { startHour: parsed.startHour, endHour: parsed.endHour } : {}),
+      ...(parsed.kind === 'moved' ? { startHour: parsed.startHour, endHour: parsed.endHour } : {}),
       summary,
       key: hash(what),
       // Same date + client (or same row for a notice): a later edit is an update.

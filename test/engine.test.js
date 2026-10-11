@@ -778,3 +778,143 @@ test('state saved by the court-only version carries over: nothing logged or remi
   assert.equal(s.phone.kind('facilities-added').length, 4, 'everyone hears about the pitches');
   assert.ok(s.engine.jobs['open|2026-10-06|wyUcHcKLSP52EBIr9asf|MTN|17']);
 });
+
+// ---------- a booking made by mistake, event days, car-free days ----------
+
+const SUN18 = 'Sunday 18 October 2026';
+const IGNORE_ROW = { date: '2026-10-18', facility: 'Multi-Purpose Court', newTime: '10:00-12:00', reason: 'Ignore - booked by mistake, Ticqet will delete it', email: true };
+
+test('a booking made by mistake (an Ignore row): nobody is told about it, not even when Ticqet removes it', async () => {
+  // Sunday: an event booked around a 10 AM-12 PM booking made by mistake, as on 11 Oct.
+  const s = setup({ at: '2026-10-17T05:00:00Z', changes: [IGNORE_ROW] });
+  s.ticqet.set(SUN18, [{ id: 'ev', seats: [...hours(7, 10), ...hours(12, 24)] }, { id: 'stray', seats: ['10', '11'] }]);
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.equal(s.engine.changeStatus.get(5), 'OK: Ignoring the 10:00 AM-12:00 PM booking at Multi-Purpose Court: no alerts, no reminders, not in the daily update, and no message when Ticqet removes it. Never emailed.');
+  assert.equal(s.phone.kind('schedule-change').length, 0, 'never emailed, even when ticked');
+
+  // The day before: the event notice has nobody to call.
+  s.clock.set('2026-10-17T06:30:00Z');
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.match(s.phone.kind('event-day')[0].text, /\nNo other team is booked at Multi-Purpose Court that day\.$/);
+
+  // Sunday: one event message, no reminders at all, nothing about 10 AM-12 PM.
+  for (const t of ['06:00', '06:30', '06:45', '09:00', '09:45', '11:00', '11:45']) {
+    s.clock.set(`2026-10-18T${t}:00Z`);
+    await s.engine.tick();
+    await s.engine.minuteTick();
+  }
+  assert.equal(s.phone.kind('reminder').length, 0);
+  assert.deepEqual(to(s.phone.kind('event-today')), [ATTENDANT]);
+  assert.doesNotMatch(s.phone.kind('daily').at(-1).text, /10:00 AM-12:00 PM/);
+  assert.match(s.phone.kind('daily').at(-1).text, /7:00-10:00 AM Event \/ setup\n12:00 PM-12:00 AM Event \/ setup/);
+
+  // Ticqet deletes it: no "cancelled" message; the row says it is done.
+  s.ticqet.remove(SUN18, 'stray');
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.equal(s.phone.kind('cancelled').length, 0);
+  assert.ok(readLog().some((e) => e.event === 'removed' && e.id === 'stray' && e.ignored));
+  assert.match(s.engine.changeStatus.get(5), /^OK: The ignored 10:00 AM-12:00 PM booking at Multi-Purpose Court has been removed from Ticqet/);
+});
+
+test('an Ignore row never hides a real booking made later in the same hours', async () => {
+  const s = setup({ at: '2026-10-16T08:00:00Z', changes: [IGNORE_ROW] });
+  s.ticqet.set(SUN18, [{ id: 'stray', seats: ['10', '11'] }]);
+  await s.engine.tick();
+  s.ticqet.remove(SUN18, 'stray');
+  await s.engine.tick();
+  assert.equal(s.phone.sent.length, 0);
+  s.ticqet.add(SUN18, { id: 'cust', seats: ['10', '11'] });
+  await s.engine.tick();
+  assert.match(s.phone.kind('new-booking')[0].text, /Multi-Purpose Court, Sun 18 Oct, 10:00 AM-12:00 PM/);
+
+  // Nothing was there when the row was added: nothing is ignored.
+  const t = setup({ at: '2026-10-16T08:00:00Z', changes: [IGNORE_ROW] });
+  await t.engine.tick();
+  await t.engine.minuteTick();
+  assert.match(t.engine.changeStatus.get(5), /^OK: There was no 10:00 AM-12:00 PM booking at Multi-Purpose Court on Ticqet when this row was added - nothing to ignore\./);
+  t.ticqet.add(SUN18, { id: 'cust', seats: ['10', '11'] });
+  await t.engine.tick();
+  assert.equal(t.phone.kind('new-booking').length, 3);
+
+  // Deleting the row stops the ignoring.
+  const u = setup({ at: '2026-10-16T08:00:00Z', changes: [IGNORE_ROW] });
+  u.ticqet.set(SUN18, [{ id: 'stray', seats: ['10', '11'] }]);
+  await u.engine.tick();
+  const court = u.cfg.settings.facilities[0];
+  const sun = { y: 2026, m: 10, d: 18, label: SUN18 };
+  assert.equal(u.engine.sessionsFor(court, sun).length, 0);
+  u.cfg.changes = [];
+  assert.equal(u.engine.sessionsFor(court, sun).length, 1);
+});
+
+test('event day: ONE "event today" message to the people who open up, instead of reminders before each part', async () => {
+  const s = setup({ at: '2026-10-17T05:00:00Z', settings: { facilities: FACILITIES }, regulars: PITCH_REGULARS });
+  s.ticqet.set(SAT17, [{ id: 'ev', seats: [...hours(7, 10), ...hours(12, 24)] }]);
+  await s.engine.tick();
+  for (const t of ['05:55', '06:00', '06:05', '06:45', '07:00', '07:45', '11:00', '11:45']) {
+    s.clock.set(`2026-10-17T${t}:00Z`);
+    await s.engine.tick();
+    await s.engine.minuteTick();
+    if (t === '05:55') assert.equal(s.phone.kind('event-today').length, 0, 'not before the first reminder time');
+  }
+  const ev = s.phone.kind('event-today');
+  assert.deepEqual(to(ev), [ATTENDANT], 'once');
+  assert.equal(ev[0].text, 'ZARIA COURT: Event today, Sat 17 Oct\nMulti-Purpose Court is booked 7:00-10:00 AM and 12:00 PM-12:00 AM for an event or setup.\nPlease open it by 6:45 AM.');
+  const rem = s.phone.kind('reminder');
+  assert.equal(rem.length, 2, 'the pitches\' 8 AM session still gets its two reminders');
+  assert.ok(rem.every((m) => /5-a-side Pitch A and 5-a-side Pitch B/.test(m.text) && !/Multi-Purpose Court/.test(m.text)));
+});
+
+test('event day: an agent updated mid-day does not repeat what the old reminders said', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'zaria-engine-'));
+  fs.writeFileSync(path.join(dir, 'reminders.json'), JSON.stringify([`rem|2026-10-17|${COURT}|7|60`, `rem|2026-10-17|${COURT}|7|15`]));
+  const s = setup({ at: '2026-10-17T11:00:00Z', dir });
+  s.ticqet.set(SAT17, [{ id: 'ev', seats: [...hours(7, 10), ...hours(12, 24)] }]);
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.equal(s.phone.kind('event-today').length, 0);
+  assert.equal(s.phone.kind('reminder').length, 0, 'no reminder for the 12 PM part either');
+});
+
+test('car-free day (a Schedule Changes row): the admin hears 3 days before, the daily update shows it', async () => {
+  const regulars = [...PITCH_REGULARS, { client: 'LOCAL CHAMPIONS', facility: '5-a-side Pitch A', day: 'Sunday', start: '08:00', end: '10:00', type: 'Monthly', from: '2026-10-09', until: '2026-10-31' }];
+  const s = setup({ at: '2026-10-15T06:30:00Z', settings: { facilities: FACILITIES }, regulars, changes: [{ date: '2026-10-18', reason: 'Car-free day', email: true }] });
+  s.ticqet.set(SUN18, [{ id: 'lc', seats: ['8', '9'] }], PITCH_A);
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  const cf = s.phone.kind('carfree');
+  assert.deepEqual(to(cf), [ADMIN]);
+  assert.equal(cf[0].text, [
+    'ZARIA COURT: Car-free day on Sun 18 Oct',
+    'Car-free day is 7:00-10:00 AM. Booked during it:',
+    '5-a-side Pitch A: 8:00-10:00 AM LOCAL CHAMPIONS (regular)',
+    'If they move or will not play, add a row on the Schedule Changes tab and tick Email everyone.',
+  ].join('\n'));
+  const mail = s.phone.kind('schedule-change');
+  assert.deepEqual(to(mail), [TEAM1, ATTENDANT, TEAM3, ADMIN].sort(), 'ticked: everyone');
+  assert.equal(mail[0].text, 'ZARIA COURT: Car-free day on Sun 18 Oct\nKigali car-free day, 7:00-10:00 AM.');
+  assert.match(s.engine.changeStatus.get(5), /^OK: Car-free day, 7:00-10:00 AM: shown in the daily update; the admin hears up to 3 days before about sessions booked during it\./);
+  s.clock.set('2026-10-16T06:30:00Z');
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.equal(s.phone.kind('carfree').length, 1, 'once');
+  s.clock.set('2026-10-18T06:30:00Z');
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  assert.match(s.phone.kind('daily').at(-1).text, /^ZARIA COURT: Today, Sun 18 Oct\nCar-free day today, 7:00-10:00 AM\.\n/);
+  assert.match(s.phone.kind('daily').at(-1).text, /8:00-10:00 AM LOCAL CHAMPIONS \(regular\) - during car-free day/);
+});
+
+test('a car-free day row added late (the day before, after the morning update) still reaches the admin', async () => {
+  const regulars = [{ client: 'LOCAL CHAMPIONS', facility: '5-a-side Pitch A', day: 'Sunday', start: '08:00', end: '10:00', type: 'Monthly', from: null, until: null }];
+  const s = setup({ at: '2026-10-17T14:00:00Z', settings: { facilities: FACILITIES }, regulars });
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  s.cfg.changes = cleanChanges([{ row: 5, date: '2026-10-18', reason: 'Car-free day' }], { regulars, facilities: FACILITIES });
+  await s.engine.minuteTick();
+  assert.equal(s.phone.kind('carfree').length, 1);
+  assert.equal(s.phone.kind('schedule-change').length, 0, 'not ticked: not emailed');
+});

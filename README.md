@@ -49,7 +49,7 @@ If the sheet has a mistake (say, a mistyped email), the agent keeps using the la
 
 **Updating the script:** rebuild, open *Extensions > Apps Script*, replace all of `Code.gs` with the new file, save. Nothing else: the tabs, the timer and the agent's memory stay. At its next check the agent adds what an older sheet lacks (new tabs, columns and settings rows, the pitches' Ticqet IDs, the regular clients of a facility that has none yet) without touching what the team typed.
 
-### Schedule changes: car-free day, Umuganda, a team not coming
+### Schedule changes: car-free day, Umuganda, a team not coming, a booking made by mistake
 
 One row per change on the **Schedule Changes** tab:
 
@@ -59,16 +59,20 @@ One row per change on the **Schedule Changes** tab:
 | 31/10/2026 | 5-a-side Pitch A | Local Champions | Cancelled | Umuganda | |
 | 17/10/2026 | | Local Champions | | Bring your own bibs | |
 | 17/10/2026 | 5-a-side Pitch B | | | Closed 2-4 PM for repairs | |
+| 18/10/2026 | | | | Car-free day | tick when ready |
+| 18/10/2026 | Multi-Purpose Court | | 10:00-12:00 | Ignore - booked by mistake | |
 
 - **New time** like `12:00-14:00` (or `12-2pm`): the client plays then instead of their usual hours. **Cancelled**: they do not play that day. Empty: just a note (with a client) or a notice for everyone (without).
+- **Car-free day** as the message, without a client: that date is a car-free day (7-10 AM, *Settings*; or the hours in New time). Kigali's car-free day has no fixed date (in 2026: 18 Jan, 22 Feb, 9 Aug, 13 Sep...), so add a row when the City of Kigali announces one.
+- **Ignore** in the message, with the Facility and the booking's hours in New time, without a client: a Ticqet booking made by mistake. The agent ignores the booking that is on Ticqet in those hours when it first reads the row: no alerts, no reminders, not in the updates, no "cancelled" email when Ticqet deletes it. A booking made later in the same hours is a real one and is alerted as usual. These rows are never emailed.
 - An empty **Facility** means every facility where the client usually plays that day.
 - The agent uses each row straight away: reminders go out for the new hours (none for the usual ones, even if they are still blocked on Ticqet), the daily update explains the change, and the open-slot check does not flag the usual hours.
 - Tick **Email everyone** when the row is ready: it is emailed to everyone within 5 minutes (after quiet hours if ticked at night). Edit it later and it is emailed again as an update.
 - The **Agent status** column says how the agent understood each row (for example *OK: Local Champions play 12:00-2:00 PM instead of 8:00-10:00 AM, at 5-a-side Pitch A and 5-a-side Pitch B. Emailed to 6 people ...*), or what is wrong with it. A mistake affects only its own row.
 
-**Umuganda** (the last Saturday of each month, 8-11 AM by default, *Settings*): it is shown in the daily update, and three days before, the admin gets a list of the sessions booked during it - so there is time to agree a new time and add a row here.
+**Umuganda** (the last Saturday of each month, 8-11 AM by default, *Settings*): it is shown in the daily update, and three days before, the admin gets a list of the sessions booked during it - so there is time to agree a new time and add a row here. A **car-free day** row works the same way (the list comes up to 3 days before, or straight away if the row is added later).
 
-**Event days:** one Ticqet booking of 6 hours or more (*Settings*) is an event or event setup. The day before, after the morning update, the team and the admin get the facility, the hours and the **teams to call**: everyone else booked at that facility that day, and regular clients whose usual hours the event took.
+**Event days:** one Ticqet booking of 6 hours or more (*Settings*) is an event or event setup. The day before, after the morning update, the team and the admin get the facility, the hours and the **teams to call**: everyone else booked at that facility that day, and regular clients whose usual hours the event took. On the day, the people who get reminders receive **one** "Event today" email (60 minutes before it starts) instead of reminders before every part of the event booking.
 
 **How it differs from the server version:** it checks every 5 minutes instead of live, so an alert arrives within about 5 minutes of a booking, and reminders may be up to 10 minutes late. Its memory lives in the script's properties, and the booking log in the sheet.
 
@@ -77,13 +81,13 @@ One row per change on the **Schedule Changes** tab:
 | Message | When | Who (Contacts sheet column) |
 |---|---|---|
 | New booking / cancelled / changed | About 1-2 minutes after it happens on Ticqet (within 5 minutes for the email version), naming the facility. Between 11 PM and 6 AM it waits and is added to the morning update. | New booking alerts = Yes |
-| Daily update | Every morning at 6:30: each facility's sessions, schedule changes, Umuganda | Daily & weekly updates = Yes |
+| Daily update | Every morning at 6:30: each facility's sessions, schedule changes, Umuganda, car-free day | Daily & weekly updates = Yes |
 | Weekly overview | Monday 6:30, instead of that day's daily update | Daily & weekly updates = Yes |
-| Reminders | 60 and 15 minutes before every session, Ticqet or regular client. Sessions starting at the same time (say both pitches at 6 PM) share one email | Reminder 1 (60 min) / Reminder 2 (15 min) = Yes; an older "Attendant reminders" column means both |
+| Reminders | 60 and 15 minutes before every session, Ticqet or regular client. Sessions starting at the same time (say both pitches at 6 PM) share one email. On an event day: one "Event today" email instead, 60 minutes before the event | Reminder 1 (60 min) / Reminder 2 (15 min) = Yes; an older "Attendant reminders" column means both |
 | Last-minute booking | A booking that starts within the hour: one message instead of the reminders | Either reminder = Yes |
 | Event day | The day before an event or setup (one booking of 6+ hours), with the teams to call; also when such a booking is made | New booking alerts = Yes, and Admin alerts = Yes |
 | Schedule change | When the admin ticks *Email everyone* on the Schedule Changes tab | Everyone |
-| Admin alerts | A booking for part of a regular client's slot, or overlapping it (possible double-booking); regular hours still open on Ticqet (each morning); renewals 3 days before Until dates (one email); sessions booked during Umuganda (3 days before); Ticqet unreadable for 15 min (and when it's back); a mistake in the sheet or a wrong Ticqet ID | Admin alerts = Yes |
+| Admin alerts | A booking for part of a regular client's slot, or overlapping it (possible double-booking); regular hours still open on Ticqet (each morning); renewals 3 days before Until dates (one email); sessions booked during Umuganda or a car-free day (3 days before); Ticqet unreadable for 15 min (and when it's back); a mistake in the sheet or a wrong Ticqet ID | Admin alerts = Yes |
 
 Regular clients (booked directly with Zaria) are never announced as new bookings; they appear by name in the updates and reminders. A Ticqet booking that is exactly a regular client's usual hours is Zaria blocking the slot for them, so it is logged without a message.
 

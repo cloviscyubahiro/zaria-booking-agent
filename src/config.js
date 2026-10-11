@@ -46,6 +46,9 @@ export const DEFAULT_SETTINGS = {
   eventMinHours: 6,
   // Umuganda, the last Saturday of every month. null = not shown.
   umuganda: { start: '08:00', end: '11:00' },
+  // The usual hours of Kigali's car-free day. Its dates change, so the admin
+  // writes each one on the Schedule Changes tab (Reason "Car-free day").
+  carFreeDay: { start: '07:00', end: '10:00' },
 };
 
 const CHANNEL_ALIASES = {
@@ -157,6 +160,12 @@ export function withDefaults(raw = {}) {
     if (!HHMM.test(String(start)) || !HHMM.test(String(end)) || end <= start) problems.push(`umuganda must be two 24-hour times like 08:00-11:00 (got "${start}-${end}").`);
   } else {
     s.umuganda = null;
+  }
+  if (s.carFreeDay) {
+    const { start, end } = s.carFreeDay;
+    if (!HHMM.test(String(start)) || !HHMM.test(String(end)) || end <= start) problems.push(`carFreeDay must be two 24-hour times like 07:00-10:00 (got "${start}-${end}").`);
+  } else {
+    s.carFreeDay = { ...DEFAULT_SETTINGS.carFreeDay }; // the dates come from Schedule Changes; the hours are needed
   }
 
   const wd = Number(s.watch?.windowDays);

@@ -8,7 +8,7 @@ import { HEAD } from './formatter.js';
 // Messages that list several things: their subject is just the title.
 const LIST_KINDS = new Set([
   'daily', 'weekly', 'overnight', 'bookings-digest', 'admin-overnight', 'open-regular-slots',
-  'regular-slot-check', 'welcome', 'test', 'config-error', 'umuganda', 'facilities-added',
+  'regular-slot-check', 'welcome', 'test', 'config-error', 'umuganda', 'carfree', 'facilities-added',
 ]);
 
 const NAVY = '#093254'; // Zaria Court navy, as on the setup workbook headers

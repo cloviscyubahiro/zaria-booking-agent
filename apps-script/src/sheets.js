@@ -94,7 +94,7 @@ export function appendBookingLog(ss, entries, createTimes, cfg = null) {
     const regular = isEvent ? '' : e.regular || (cfg && day ? matchRegular({ slots: slots.map(Number) }, cfg.regulars, day, facility, cfg.changes || []) : null);
     const row = [
       kigaliStamp(e.at),
-      `${WHAT[e.event] || e.event}${isEvent ? ' (event / setup)' : ''}`,
+      `${WHAT[e.event] || e.event}${isEvent ? ' (event / setup)' : ''}${e.ignored ? ' - ignored (Schedule Changes), nobody told' : ''}`,
       day ? `${shortDate(day.y, day.m, day.d)} ${day.y}` : e.date,
       time,
       new Set(slots.map(Number)).size,
@@ -172,11 +172,13 @@ function reminderLabels(settings) {
 const dmy = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : '');
 
 const FACILITIES_NOTE = 'Every facility with Watch = Yes is watched. The Ticqet ID is the code at the end of its link on ticqet.rw.';
-const CHANGES_NOTE = 'For one-off changes: car-free day, Umuganda, an event, a team not coming. New time like 12:00-14:00, or Cancelled; leave it empty for a note. Tick Email everyone when the row is ready - the agent emails it within 5 minutes and uses it in reminders and the daily update.';
+const CHANGES_NOTE_V1 = 'For one-off changes: car-free day, Umuganda, an event, a team not coming. New time like 12:00-14:00, or Cancelled; leave it empty for a note. Tick Email everyone when the row is ready - the agent emails it within 5 minutes and uses it in reminders and the daily update.';
+const CHANGES_NOTE = 'One-off changes. A team moves: Client + New time like 12:00-14:00 (or Cancelled). A note: leave New time empty. Car-free day: the Date + "Car-free day" as the message. A booking made by mistake: Facility + its hours in New time + "Ignore" in the message. Tick Email everyone when a row is ready (Ignore rows are never emailed).';
 
 const SETTING_ROWS_ADDED = [
   ['Event day: one booking of at least (hours)', (s) => String(s.eventMinHours), 'A booking this long is an event or setup: the team and the admin are told the day before, with the teams to call. 0 = off.'],
   ['Umuganda (last Saturday of the month)', (s) => (s.umuganda ? `${s.umuganda.start}-${s.umuganda.end}` : ''), 'Shown in the daily update. The admin hears 3 days before about sessions booked during Umuganda. Empty = off.'],
+  ['Car-free day hours', (s) => (s.carFreeDay ? `${s.carFreeDay.start}-${s.carFreeDay.end}` : '07:00-10:00'), 'Its date changes, so add each car-free day on the Schedule Changes tab (Date, and Car-free day as the message). Shown in the daily update; the admin hears up to 3 days before about sessions booked during it.'],
 ];
 
 const BUILDERS = {
@@ -450,6 +452,66 @@ export function prefillRegulars(ss, regulars, props, known = []) {
   return out;
 }
 
+// Schedule Changes rows from the build (e.g. bookings to ignore) that are not on
+// the sheet yet: added once each, below the last row in use, so rows the team
+// deletes stay deleted. Rows for past dates are skipped. Also refreshes the
+// tab's note if it is still the older wording.
+export function prefillChanges(ss, changes, props) {
+  const sh = ss.getSheetByName(TABS.changes);
+  if (!sh) return [];
+  const out = [];
+  const values = sh.getDataRange().getValues();
+  if (String((values[1] || [])[0] ?? '') === CHANGES_NOTE_V1) sh.getRange(2, 1).setValue(CHANGES_NOTE);
+  if (!changes.length) return out;
+  const hi = values.findIndex((r) => norm(r[0]) === 'date');
+  if (hi < 0) return out;
+  const tz = ss.getSpreadsheetTimeZone() || ZONE;
+  const head = values[hi].map(norm);
+  const col = (name) => head.findIndex((h) => h.startsWith(name));
+  const c = { date: col('date'), facility: col('facility'), client: col('client'), newTime: col('new time'), reason: col('reason'), email: col('email') };
+  if (Object.values(c).some((i) => i < 0)) return out;
+  const isoOf = (v) => (isDate(v) ? Utilities.formatDate(v, tz, 'yyyy-MM-dd') : /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(String(v).trim())
+    ? String(v).trim().replace(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/, (_, d, m, y) => `${y}-${pad(m)}-${pad(d)}`) : String(v ?? '').trim());
+  const keyOf = (x) => ['date', 'facility', 'client', 'newTime', 'reason'].map((k) => nameKey(x[k])).join('|');
+  const rows = values.slice(hi + 1);
+  const present = new Set(rows.map((r) => keyOf({ date: isoOf(r[c.date]), facility: r[c.facility], client: r[c.client], newTime: r[c.newTime], reason: r[c.reason] })));
+  let last = hi + 1; // the last row in use (1-based); checkboxes alone do not count
+  rows.forEach((r, i) => {
+    if ([c.date, c.facility, c.client, c.newTime, c.reason].some((j) => String(r[j] ?? '').trim())) last = hi + 2 + i;
+  });
+  const done = new Set(props.get('prefilled', []));
+  const today = isoDate(nowInZone(ZONE));
+  const add = [];
+  for (const x of changes) {
+    const flag = `change:${keyOf(x)}`;
+    if (!x.date || x.date < today || done.has(flag)) continue;
+    done.add(flag);
+    if (present.has(keyOf(x))) continue; // the team already has it
+    add.push(x);
+  }
+  props.set('prefilled', [...done]);
+  if (!add.length) return out;
+  const cells = add.map((x) => {
+    const r = [];
+    r[c.date] = x.date; // an ISO date is read as a date in any locale
+    r[c.facility] = x.facility || '';
+    r[c.client] = x.client || '';
+    r[c.newTime] = x.newTime || '';
+    r[c.reason] = x.reason || '';
+    r[c.email] = !!x.email;
+    return Array.from({ length: Math.max(...Object.values(c)) + 1 }, (_, j) => (r[j] === undefined ? '' : r[j]));
+  });
+  // Write the typed columns only, so the Agent status column is left alone.
+  for (const [k, j] of Object.entries(c)) {
+    const range = sh.getRange(last + 1, j + 1, cells.length, 1);
+    if (k === 'date') range.setNumberFormat('dd/mm/yyyy');
+    if (k === 'newTime') range.setNumberFormat('@');
+    range.setValues(cells.map((r) => [r[j]]));
+  }
+  out.push(`Schedule Changes: added ${add.length} row(s)`);
+  return out;
+}
+
 // Everything an older sheet needs, every run (cheap when nothing is missing).
 // Each step stands alone: one that fails is reported, and the agent still runs.
 // Returns { done, failed } - what was changed, and what could not be.
@@ -473,6 +535,7 @@ export function upgradeSheet(ss, { settings, prefill, props }) {
   step('Settings', () => upgradeSettings(ss, settings));
   step('Bookings Log', () => upgradeBookingsLog(ss, settings.court.name));
   step('Regular Clients', () => prefillRegulars(ss, prefill.regulars || [], props, known));
+  step('Schedule Changes', () => prefillChanges(ss, prefill.changes || [], props));
   step('drop-down lists', () => {
     const steps = new Set(props.get('sheetUpgrades', []));
     if (steps.has('validations-2')) return [];

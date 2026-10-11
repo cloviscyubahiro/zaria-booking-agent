@@ -12,6 +12,7 @@
 
 import { shortDate, formatRange, compactRange, clockLabel, clockLabelMinutes, joinNames, dayFromIso } from './time.js';
 import { rangesText } from './bookings.js';
+import { carFreeExtra } from './changes.js';
 
 export const HEAD = 'ZARIA COURT';
 
@@ -22,7 +23,7 @@ const possessive = (name) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
 const noDot = (s) => String(s).replace(/[.\s]+$/, '');
 
 // "8:00-11:00 AM" from minutes since midnight (whole hours read best).
-function minuteSpan(startMin, endMin) {
+export function minuteSpan(startMin, endMin) {
   if (startMin % 60 === 0 && endMin % 60 === 0) return formatRange(startMin / 60, endMin / 60);
   return `${clockLabelMinutes(startMin)}-${clockLabelMinutes(endMin)}`;
 }
@@ -49,13 +50,19 @@ function who(s) {
   return `${s.client ? `${s.client} (regular client)` : 'Ticqet booking'}${changeNote(s)}`;
 }
 
+// " - during Umuganda" / " - during car-free day" for a session inside such hours.
+// `marks` = [{ name, start, end }] in minutes.
+function duringNote(s, marks) {
+  const hit = marks.filter((m) => m && s.startHour * 60 < m.end && s.endHour * 60 > m.start);
+  return hit.length ? ` - during ${joinNames(hit.map((m) => m.name))}` : '';
+}
+
 // One line of a schedule: "6:00-8:00 PM Inspire Stars (regular)".
-function scheduleLine(s, umuganda = null) {
+function scheduleLine(s, marks = []) {
   const range = formatRange(s.startHour, s.endHour);
   if (s.event) return `${range} Event / setup`;
   if (s.off) return `${range} ${s.client}${changeNote(s)}`;
-  const during = umuganda && s.startHour * 60 < umuganda.end && s.endHour * 60 > umuganda.start ? ' - during Umuganda' : '';
-  return `${range} ${s.client ? `${s.client} (regular)` : 'Ticqet booking'}${changeNote(s)}${during}`;
+  return `${range} ${s.client ? `${s.client} (regular)` : 'Ticqet booking'}${changeNote(s)}${duringNote(s, marks)}`;
 }
 
 // The same, very short, for the weekly overview: "6-8PM Inspire Stars".
@@ -163,6 +170,18 @@ export function eventBooked({ booking, facility = booking.facility, when, teams 
   return lines.join('\n');
 }
 
+// The morning of an event day, to the people who open the facilities: ONE
+// message instead of reminders before every part of the event booking.
+// `readyBy` = minutes since midnight; `started` = the event is already on.
+export function eventToday({ facility, date, ranges, readyBy, started = false }) {
+  const hours = ranges.map((r) => formatRange(r.startHour, r.endHour)).join(' and ');
+  return [
+    `${HEAD}: Event today, ${dayText(date)}`,
+    `${facility} is booked ${hours} for an event or setup.`,
+    started ? 'It has started - please make sure it is open.' : `Please open it by ${clockLabelMinutes(readyBy)}.`,
+  ].join('\n');
+}
+
 // ---------- attendant messages ----------
 
 // Reminder before sessions. `items` = the sessions starting at the same time,
@@ -216,11 +235,13 @@ export function lastMinute(session, facility, minutesToStart) {
 // [{ name, sessions: [{ startHour, endHour, client|null, event?, off?, change? }] }].
 // With one facility the layout is: name, sessions, total. With several, each
 // facility is a heading with its hours.
-// `umuganda` = { start, end } in minutes, on Umuganda days. `notes` = lines
-// from the Schedule Changes tab.
-export function dailyUpdate(date, sections, { overnight = [], dataOk = true, notes = [], umuganda = null } = {}) {
+// `umuganda` = { start, end } in minutes, on Umuganda days; `carFree` the same
+// on a car-free day (a section's own `carFree` = only at that facility).
+// `notes` = lines from the Schedule Changes tab.
+export function dailyUpdate(date, sections, { overnight = [], dataOk = true, notes = [], umuganda = null, carFree = null } = {}) {
   const lines = [`${HEAD}: Today, ${dayText(date)}`];
   if (umuganda) lines.push(`Umuganda today, ${minuteSpan(umuganda.start, umuganda.end)}.`);
+  if (carFree) lines.push(`Car-free day today, ${minuteSpan(carFree.start, carFree.end)}.`);
   const single = sections.length === 1;
   let total = 0;
   for (const sec of sections) {
@@ -232,7 +253,11 @@ export function dailyUpdate(date, sections, { overnight = [], dataOk = true, not
     } else {
       lines.push(sec.sessions.length ? `${sec.name} (${hrsText(hrs)}):` : `${sec.name}: no bookings yet.`);
     }
-    for (const s of sec.sessions) lines.push(scheduleLine(s, umuganda));
+    const marks = [
+      umuganda && { name: 'Umuganda', ...umuganda },
+      (sec.carFree !== undefined ? sec.carFree : carFree) && { name: 'car-free day', ...(sec.carFree !== undefined ? sec.carFree : carFree) },
+    ].filter(Boolean);
+    for (const s of sec.sessions) lines.push(scheduleLine(s, marks));
   }
   if (single && sections[0].sessions.length) lines.push(`Total booked: ${hrsText(total)}`);
   if (notes.length) lines.push('Notes:', ...notes);
@@ -242,7 +267,7 @@ export function dailyUpdate(date, sections, { overnight = [], dataOk = true, not
 }
 
 // The week ahead (weekly overview). `sections` = one per facility:
-// [{ name, days: [{ label: "Mon", sessions: [...], umuganda? }] }].
+// [{ name, days: [{ label: "Mon", sessions: [...], umuganda?, carFree? }] }].
 export function weeklyOverview(rangeText, sections, { overnight = [], dataOk = true } = {}) {
   const lines = [`${HEAD}: Week of ${rangeText}`];
   const single = sections.length === 1;
@@ -258,7 +283,11 @@ export function weeklyOverview(rangeText, sections, { overnight = [], dataOk = t
         continue;
       }
       for (const s of day.sessions) if (!s.off) total += s.endHour - s.startHour;
-      const label = day.umuganda ? `${day.label} (Umuganda ${minuteSpan(day.umuganda.start, day.umuganda.end)})` : day.label;
+      const marks = [
+        day.umuganda && `Umuganda ${minuteSpan(day.umuganda.start, day.umuganda.end)}`,
+        day.carFree && `Car-free day ${minuteSpan(day.carFree.start, day.carFree.end)}`,
+      ].filter(Boolean);
+      const label = marks.length ? `${day.label} (${marks.join(', ')})` : day.label;
       body.push(`${label} ${day.sessions.map(weekItem).join(', ')}`);
     }
     grand += total;
@@ -285,12 +314,22 @@ export function weeklyOverview(rangeText, sections, { overnight = [], dataOk = t
 // ---------- schedule changes (from the admin, via the sheet) ----------
 
 // One row of the Schedule Changes tab, as it is emailed to everyone.
-// `c` comes from changes.js (kind, date, client, facility, reason, summary).
+// `c` comes from changes.js (kind, date, client, facility, reason, summary);
+// a car-free day also carries `span` ({ start, end } in minutes, from the engine).
 export function scheduleChange(c, { updated = false } = {}) {
   const d = dayFromIso(c.date);
   const day = dayText(d);
   const pre = updated ? 'Updated: ' : '';
   if (c.kind === 'notice') return [`${HEAD}: ${pre}Notice for ${day}`, `${c.facility ? `${c.facility}: ` : ''}${c.reason}`].join('\n');
+  if (c.kind === 'carfree') {
+    const span = c.span || { start: 7 * 60, end: 10 * 60 };
+    const extra = carFreeExtra(c.reason);
+    return [
+      `${HEAD}: ${pre}Car-free day on ${day}`,
+      `Kigali car-free day, ${minuteSpan(span.start, span.end)}${c.facility ? ` (${c.facility})` : ''}.`,
+      ...(extra ? [`${extra.charAt(0).toUpperCase()}${extra.slice(1)}${/[.!?]$/.test(extra) ? '' : '.'}`] : []),
+    ].join('\n');
+  }
   if (c.kind === 'note') return [`${HEAD}: ${pre}Note for ${day}`, `${c.client}${c.facility ? ` (${c.facility})` : ''}: ${c.reason}`].join('\n');
   const lines = [`${HEAD}: ${pre}Schedule change, ${day}`, c.summary];
   if (c.reason) lines.push(`Reason: ${noDot(c.reason)}.`);
@@ -303,9 +342,24 @@ export function umugandaHeadsUp(date, umuganda, items) {
   return [
     `${HEAD}: Umuganda on ${dayText(date)}`,
     `Umuganda is ${minuteSpan(umuganda.start, umuganda.end)}. Booked during Umuganda:`,
-    ...items.map((s) => `${s.facility}: ${formatRange(s.startHour, s.endHour)} ${s.client ? `${s.client} (regular)` : 'Ticqet booking'}`),
+    ...items.map(headsUpLine),
     'If they move or will not play, add a row on the Schedule Changes tab and tick Email everyone.',
   ].join('\n');
+}
+
+// A car-free day is coming (the admin wrote it on the Schedule Changes tab):
+// sessions booked during its hours. Same shape as the Umuganda heads-up.
+export function carFreeHeadsUp(date, span, items) {
+  return [
+    `${HEAD}: Car-free day on ${dayText(date)}`,
+    `Car-free day is ${minuteSpan(span.start, span.end)}. Booked during it:`,
+    ...items.map(headsUpLine),
+    'If they move or will not play, add a row on the Schedule Changes tab and tick Email everyone.',
+  ].join('\n');
+}
+
+function headsUpLine(s) {
+  return `${s.facility}: ${formatRange(s.startHour, s.endHour)} ${s.client ? `${s.client} (regular)` : 'Ticqet booking'}`;
 }
 
 // ---------- admin messages ----------

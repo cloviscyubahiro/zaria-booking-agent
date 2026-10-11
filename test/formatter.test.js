@@ -119,6 +119,31 @@ test('schedule change email: what changed, where, and why', () => {
   assert.equal(fmt.scheduleChange({ date: '2026-10-10', kind: 'notice', facility: PITCH_A, reason: 'Closed 2-4 PM for repairs' }), 'ZARIA COURT: Notice for Sat 10 Oct\n5-a-side Pitch A: Closed 2-4 PM for repairs');
 });
 
+test('event today: one short message with the hours and when to open', () => {
+  const m = fmt.eventToday({ facility: COURT, date: { y: 2026, m: 10, d: 11 }, ranges: [{ startHour: 7, endHour: 10 }, { startHour: 12, endHour: 24 }], readyBy: 6 * 60 + 45 });
+  assert.equal(m, 'ZARIA COURT: Event today, Sun 11 Oct\nMulti-Purpose Court is booked 7:00-10:00 AM and 12:00 PM-12:00 AM for an event or setup.\nPlease open it by 6:45 AM.');
+  assert.equal(toEmail(m, { kind: 'event-today' }).subject, 'Event today, Sun 11 Oct: Multi-Purpose Court is booked 7:00-10:00 AM and 12:00 PM-12:00 AM for an event or setup');
+  assert.match(fmt.eventToday({ facility: COURT, date: { y: 2026, m: 10, d: 11 }, ranges: [{ startHour: 7, endHour: 24 }], readyBy: 405, started: true }), /It has started - please make sure it is open\.$/);
+});
+
+test('car-free day: the email to everyone, and the admin\'s heads-up', () => {
+  const sun18 = { y: 2026, m: 10, d: 18 };
+  assert.equal(fmt.scheduleChange({ date: '2026-10-18', kind: 'carfree', reason: 'Car-free day', span: { start: 420, end: 600 } }),
+    'ZARIA COURT: Car-free day on Sun 18 Oct\nKigali car-free day, 7:00-10:00 AM.');
+  assert.equal(fmt.scheduleChange({ date: '2026-10-18', kind: 'carfree', reason: 'Car free day: players use the back gate', span: { start: 420, end: 660 }, facility: PITCH_A }),
+    'ZARIA COURT: Car-free day on Sun 18 Oct\nKigali car-free day, 7:00-11:00 AM (5-a-side Pitch A).\nPlayers use the back gate.');
+  assert.equal(fmt.carFreeHeadsUp(sun18, { start: 420, end: 600 }, [{ facility: PITCH_A, startHour: 8, endHour: 10, client: 'LOCAL CHAMPIONS' }]), [
+    'ZARIA COURT: Car-free day on Sun 18 Oct',
+    'Car-free day is 7:00-10:00 AM. Booked during it:',
+    '5-a-side Pitch A: 8:00-10:00 AM LOCAL CHAMPIONS (regular)',
+    'If they move or will not play, add a row on the Schedule Changes tab and tick Email everyone.',
+  ].join('\n'));
+  const daily = fmt.dailyUpdate(sun18, [{ name: PITCH_A, sessions: [{ startHour: 8, endHour: 10, client: 'LOCAL CHAMPIONS' }, { startHour: 15, endHour: 17, client: null }] }], { carFree: { start: 420, end: 600 } });
+  assert.match(daily, /^ZARIA COURT: Today, Sun 18 Oct\nCar-free day today, 7:00-10:00 AM\.\n5-a-side Pitch A\n8:00-10:00 AM LOCAL CHAMPIONS \(regular\) - during car-free day\n3:00-5:00 PM Ticqet booking\n/);
+  const week = fmt.weeklyOverview('Mon 12 Oct - Sun 18 Oct', [{ name: PITCH_A, days: [{ label: 'Sun', sessions: [{ startHour: 8, endHour: 10, client: 'LOCAL CHAMPIONS' }], carFree: { start: 420, end: 600 } }] }]);
+  assert.match(week, /Sun \(Car-free day 7:00-10:00 AM\) 8-10AM LOCAL CHAMPIONS/);
+});
+
 test('cancelled message says the slot is free, and whose it was', () => {
   assert.match(fmt.cancelledBooking(booking, COURT), /Multi-Purpose Court, Tue 6 Oct, 9:00-11:00 PM \(2 hrs\) is now FREE\./);
   assert.match(fmt.cancelledBooking(booking, COURT, 'LOCAL CHAMPIONS'), /FREE \(was LOCAL CHAMPIONS' regular slot\)/);
@@ -151,6 +176,9 @@ test('every message uses plain SMS characters, and alerts fit in one SMS', () =>
     fmt.welcome({ channelName: 'WhatsApp', facilities: [COURT, PITCH_A], dailyTime: '6:30 AM', adminName: 'Clovis' }),
     fmt.eventDay({ facility: COURT, date: day, when: 'today', ranges: [{ startHour: 7, endHour: 24 }], teams: [s] }),
     fmt.umugandaHeadsUp(day, { start: 480, end: 660 }, [s]),
+    fmt.carFreeHeadsUp(day, { start: 420, end: 600 }, [s]),
+    fmt.eventToday({ facility: COURT, date: day, ranges: [{ startHour: 7, endHour: 10 }, { startHour: 12, endHour: 24 }], readyBy: 405 }),
+    fmt.scheduleChange({ date: '2026-10-18', kind: 'carfree', reason: 'Car-free day - roads closed near the court', span: { start: 420, end: 600 } }),
   ];
   for (const m of all) assert.deepEqual(nonGsmChars(m), [], m);
   for (const m of all.slice(0, 7)) assert.equal(smsSegments(m), 1, `one SMS: ${m}`);

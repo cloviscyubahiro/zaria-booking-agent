@@ -93,6 +93,7 @@ const SETTINGS_ROWS = [
   ['send welcome message', (v, s) => { s.sendWelcome = yes(v); }],
   ['event day', (v, s) => { s.eventMinHours = str(v) === '' ? 0 : Number(v); }],
   ['umuganda', (v, s) => { s.umuganda = toSpan(v); }],
+  ['car-free day', (v, s) => { s.carFreeDay = toSpan(v); }],
 ];
 
 // "08:00-11:00" -> { start: '08:00', end: '11:00' }; empty or "No" -> null.

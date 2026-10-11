@@ -14,13 +14,16 @@
 //
 // Who gets what (agreed with Zaria):
 //   team        new / cancelled / changed bookings         (held during quiet hours)
-//   attendants  reminders before sessions, last-minute bookings (never held)
+//   attendants  reminders before sessions, last-minute bookings (never held);
+//               on an event day ONE "event today" message instead of reminders
+//               before every part of the event booking
 //   summaries   daily update, or the weekly overview on its day
 //   team+admin  event days (one booking of many hours): the day before, with the
 //               teams to call because the facility is not available
 //   everyone    schedule changes the admin writes on the sheet (car-free day...)
 //   admin       possible double-bookings, open regular slots, renewals,
-//               Umuganda heads-up, technical alarms, anything unusual
+//               Umuganda and car-free day heads-up, technical alarms, anything unusual
+//   nobody      bookings the admin asked to ignore (made by mistake on Ticqet)
 
 import { log, mask } from './logger.js';
 import * as store from './store.js';
@@ -29,15 +32,16 @@ import { bookingFromDoc, diffDay, fingerprint, pairReissues, slotsToRanges } fro
 import {
   nowInZone, dateWindow, ticqetLabel, hhmmToMinutes, weekdayOf, WEEKDAYS,
   isoDate, dayFromIso, dayFromLabel, daysBetween, shortDate, clockLabelMinutes,
-  compactRange, addDays, isLastSaturday, joinNames,
+  compactRange, addDays, isLastSaturday, joinNames, formatRange,
 } from './time.js';
 import { planForDate, windowHolding, lapsedRegularHours, buildSessions } from './regulars.js';
 import { recipients, adminName, channelName } from './config.js';
+import { sameName } from './facilities.js';
 
 // Admin messages are never blocked by the daily message cap.
 const ADMIN_KINDS = new Set([
   'regular-slot-check', 'mass-removal', 'open-regular-slots', 'renewal',
-  'technical', 'technical-recovered', 'send-cap', 'admin-overnight', 'umuganda',
+  'technical', 'technical-recovered', 'send-cap', 'admin-overnight', 'umuganda', 'carfree',
 ]);
 // Booking alerts are the first to pause when the day's messages run low, so
 // reminders, updates and event notices still go out.
@@ -48,6 +52,7 @@ const REMINDER_TOLERANCE_MIN = 5;
 const MORNING_GRACE_MIN = 180; // send the morning update up to 3 h late, never in the evening
 const MORNING_DATA_WAIT_MIN = 15; // wait this long for fresh Ticqet data before the morning update
 const UMUGANDA_NOTICE_DAYS = 3; // the admin hears about sessions during Umuganda up to 3 days before
+const CAR_FREE_NOTICE_DAYS = 3; // ... and during a car-free day
 
 const dateOf = (d) => ({ y: d.y, m: d.m, d: d.d, label: d.label });
 const sameDay = (a, b) => a.y === b.y && a.m === b.m && a.d === b.d;
@@ -151,6 +156,86 @@ export class Engine {
 
   bookingsOn(f, date) { return this.snapshot.days[f.ticqetEventId]?.[date.label]; }
   dayKnown(f, date) { return this.bookingsOn(f, date) !== undefined; }
+  facilityById(id) { return this.facilities.find((f) => f.ticqetEventId === id) || null; }
+
+  // What is on Ticqet at a facility on a date, minus the bookings the admin
+  // asked to ignore. Everything people are told about comes from this.
+  liveBookingsOn(f, date) {
+    const list = this.bookingsOn(f, date);
+    if (!list) return list;
+    const ignored = this.ignoredIds(f, date);
+    return ignored.size ? list.filter((b) => !ignored.has(b.id)) : list;
+  }
+
+  // ---------- bookings to ignore (Schedule Changes rows with "Ignore") ----------
+  // A row ignores the bookings inside its hours that were on Ticqet when the
+  // agent first saw the row - so a real booking made later in the same hours
+  // (after Ticqet deleted the mistaken one) is alerted as usual. Deleting the
+  // row stops the ignoring.
+
+  ignoreKey(c, f) { return `ign|${c.date}|${f.ticqetEventId}|${c.key}`; }
+
+  ignoreRowsFor(f, iso) {
+    return this.changes.filter((c) => c.kind === 'ignore' && c.date === iso && sameName(c.facility, f.name));
+  }
+
+  ignoredIds(f, date) {
+    const out = new Set();
+    for (const c of this.ignoreRowsFor(f, isoDate(date))) {
+      const pin = this.jobs[this.ignoreKey(c, f)];
+      if (pin && pin.ids) for (const id of pin.ids) out.add(id);
+    }
+    return out;
+  }
+
+  isIgnored(b) {
+    const f = this.facilityById(b.facilityId);
+    return !!f && this.ignoredIds(f, b.date).has(b.id);
+  }
+
+  // Note which bookings each new "Ignore" row covers, once its date has been read.
+  pinIgnored() {
+    let dirty = false;
+    for (const c of this.changes) {
+      if (c.kind !== 'ignore') continue;
+      const f = this.facilities.find((x) => sameName(x.name, c.facility));
+      if (!f || this.jobs[this.ignoreKey(c, f)]) continue;
+      const d = dayFromIso(c.date);
+      const list = this.bookingsOn(f, { label: ticqetLabel(d.y, d.m, d.d) });
+      if (list === undefined) continue; // not read yet (or not in the watched days)
+      const ids = list.filter((b) => b.slots.length && b.slots.every((h) => h >= c.startHour && h < c.endHour)).map((b) => b.id);
+      this.jobs[this.ignoreKey(c, f)] = { at: this.stamp(), ids };
+      dirty = true;
+      log.info(`[engine] ${f.name}, ${c.date}: ignoring ${ids.length} booking(s) in ${c.startHour}:00-${c.endHour}:00 (Schedule Changes row ${c.row})`);
+    }
+    if (dirty) this.saveJobs();
+  }
+
+  // Ticqet re-issued an ignored record (new id, same hours): keep ignoring it.
+  carryIgnore(f, date, beforeId, afterId) {
+    for (const c of this.ignoreRowsFor(f, isoDate(date))) {
+      const pin = this.jobs[this.ignoreKey(c, f)];
+      if (pin && pin.ids && pin.ids.includes(beforeId) && !pin.ids.includes(afterId)) {
+        pin.ids.push(afterId);
+        this.saveJobs();
+      }
+    }
+  }
+
+  // What the "Agent status" column says about an "Ignore" row.
+  ignoreStatus(c) {
+    const f = this.facilities.find((x) => sameName(x.name, c.facility));
+    if (!f) return `Problem: ${c.facility} is not watched.`;
+    const range = formatRange(c.startHour, c.endHour);
+    const pin = this.jobs[this.ignoreKey(c, f)];
+    if (!pin) return `OK: Will ignore the ${range} booking at ${f.name} once the agent has read that date on Ticqet.`;
+    if (!pin.ids.length) return `OK: There was no ${range} booking at ${f.name} on Ticqet when this row was added - nothing to ignore. New bookings are alerted as usual.`;
+    const d = dayFromIso(c.date);
+    const still = (this.bookingsOn(f, { label: ticqetLabel(d.y, d.m, d.d) }) || []).filter((b) => pin.ids.includes(b.id));
+    if (!still.length) return `OK: The ignored ${range} booking at ${f.name} has been removed from Ticqet. Nothing more to do - you can delete this row.`;
+    const hours = slotsToRanges(still.flatMap((b) => b.slots)).map((r) => formatRange(r.startHour, r.endHour)).join(' + ');
+    return `OK: Ignoring the ${hours} booking at ${f.name}: no alerts, no reminders, not in the daily update, and no message when Ticqet removes it. Never emailed.`;
+  }
   plan(facilityName, date) { return planForDate(this.regulars, date, facilityName, this.changes); }
   isEventBooking(b) { return this.settings.eventMinHours > 0 && b.hours >= this.settings.eventMinHours; }
 
@@ -162,7 +247,7 @@ export class Engine {
   }
 
   sessionsFor(f, date) {
-    return buildSessions(this.bookingsOn(f, date) || [], this.regulars, date, f.name, {
+    return buildSessions(this.liveBookingsOn(f, date) || [], this.regulars, date, f.name, {
       changes: this.changes,
       eventMinHours: this.settings.eventMinHours,
       exempt: this.lateIds(f, date),
@@ -173,7 +258,7 @@ export class Engine {
   // need a call - everyone else booked there that day, plus regulars whose
   // usual hours the event booking took.
   eventInfo(f, date) {
-    const events = (this.bookingsOn(f, date) || []).filter((b) => this.isEventBooking(b));
+    const events = (this.liveBookingsOn(f, date) || []).filter((b) => this.isEventBooking(b));
     if (!events.length) return null;
     const eventSlots = new Set(events.flatMap((b) => b.slots));
     const ranges = slotsToRanges([...eventSlots]);
@@ -193,6 +278,22 @@ export class Engine {
     const u = this.settings.umuganda;
     if (!u || !isLastSaturday(date.y, date.m, date.d)) return null;
     return { start: hhmmToMinutes(u.start), end: hhmmToMinutes(u.end) };
+  }
+
+  // A car-free day row's hours: its New time, else the usual hours (Settings).
+  carFreeSpan(c) {
+    if (c.startHour !== undefined) return { start: c.startHour * 60, end: c.endHour * 60 };
+    const u = this.settings.carFreeDay || { start: '07:00', end: '10:00' };
+    return { start: hhmmToMinutes(u.start), end: hhmmToMinutes(u.end) };
+  }
+
+  // Car-free day on a date (written on the Schedule Changes tab): { start, end }
+  // in minutes, or null. With a facility: only rows for every facility or that one.
+  carFreeOn(date, facilityName = null) {
+    const iso = isoDate(date);
+    const c = this.changes.find((x) => x.kind === 'carfree' && x.date === iso
+      && (!x.facility || !facilityName || sameName(x.facility, facilityName)));
+    return c ? this.carFreeSpan(c) : null;
   }
 
   eventRecipients() {
@@ -231,6 +332,10 @@ export class Engine {
       }
       store.saveSnapshot(this.snapshot);
     }
+
+    // Bookings to ignore are noted from what was already seen, before any change
+    // is looked at - so Ticqet deleting one is not announced as a cancellation.
+    this.pinIgnored();
 
     const settleMs = (this.settings.watch.settleSeconds ?? 60) * 1000;
     const nowMs = this.nowMs();
@@ -281,6 +386,7 @@ export class Engine {
         const { added, removed, reissued } = pairReissues(diff.added, diff.removed);
         for (const r of reissued) {
           log.info(`[engine] ${f.name}, ${day.label}: record re-issued (${r.before.id} -> ${r.after.id}) with the same hours - not alerted`);
+          this.carryIgnore(f, date, r.before.id, r.after.id);
         }
         for (const b of added) events.push({ type: 'added', booking: tag(b) });
         for (const b of removed) events.push({ type: 'removed', booking: tag(b) });
@@ -291,6 +397,7 @@ export class Engine {
     }
 
     if (dirty) store.saveSnapshot(this.snapshot);
+    this.pinIgnored(); // rows for dates read for the first time just now
     if (events.length) await this.dispatch(events);
     await this.maybeWelcome();
     await this.maybeAnnounceFacilities();
@@ -306,6 +413,17 @@ export class Engine {
     const checks = []; // for the admin: bookings in a regular client's slot
 
     for (const ev of events) {
+      // A booking the admin asked to ignore: logged, nobody told.
+      const subject = ev.booking || ev.after;
+      if (this.isIgnored(subject)) {
+        store.appendBookingLog({
+          event: ev.type, at: this.stamp(), facility: subject.facility, facilityId: subject.facilityId, date: subject.date.label, id: subject.id,
+          ...(ev.type === 'changed' ? { from: ev.before.slots, to: subject.slots } : { slots: subject.slots }),
+          ignored: true,
+        });
+        log.info(`[engine] ${ev.type} on ${subject.facility}, ${subject.date.label}: an ignored booking (Schedule Changes) - not alerted`);
+        continue;
+      }
       if (ev.type === 'changed') {
         const a = ev.after;
         store.appendBookingLog({ event: 'changed', at: this.stamp(), facility: a.facility, facilityId: a.facilityId, date: a.date.label, id: a.id, from: ev.before.slots, to: a.slots });
@@ -542,9 +660,12 @@ export class Engine {
   // ======================================================================
 
   async minuteTick() {
+    this.pinIgnored();
     await this.tickReminders();
+    await this.eventTodayNotices();
     await this.morningJobs();
     await this.eventNotices();
+    await this.carFreeHeadsUp();
     await this.announceChanges();
     await this.flushDeferredIfDue();
     await this.checkSilence();
@@ -554,7 +675,8 @@ export class Engine {
   // Reminders before every session today, at every facility (Ticqet and
   // regular). The first one (e.g. 60 min) goes to the "Reminder 1" people,
   // later ones to "Reminder 2". Sessions starting at the same time share one
-  // message. No reminder for a regular who is not playing (schedule change).
+  // message. No reminder for a regular who is not playing (schedule change),
+  // nor for an event or setup (eventTodayNotices sends one message instead).
   async tickReminders() {
     const mins = this.settings.attendantReminderMinutes;
     if (!mins.length) return;
@@ -568,7 +690,7 @@ export class Engine {
 
     for (const f of this.facilities) {
       for (const s of this.sessionsFor(f, today)) {
-        if (s.off) continue;
+        if (s.off || s.event) continue;
         const start = s.startHour * 60;
         if (cur >= start) continue;
         for (let i = 0; i < mins.length; i++) {
@@ -588,6 +710,33 @@ export class Engine {
       for (const [startHour, items] of [...due[i]].sort((a, b) => a[0] - b[0])) {
         await this.send('reminder', fmt.reminder(items, mins[i], i === 0, startHour * 60 - readyGap), recipients(this.cfg, i === 0 ? 'reminder1' : 'reminder2'));
       }
+    }
+  }
+
+  // Event days: the people who get reminders hear ONCE that a facility is booked
+  // for an event or setup today - when the first reminder would be due before
+  // its first hour - instead of two reminders before every part of the booking.
+  async eventTodayNotices() {
+    const mins = this.settings.attendantReminderMinutes;
+    if (!(this.settings.eventMinHours > 0) || !mins.length) return;
+    const n = this.now();
+    const today = this.today(n);
+    const iso = isoDate(today);
+    const cur = this.minuteOfDay(n);
+    const readyGap = mins.length > 1 ? mins[mins.length - 1] : 0;
+    for (const f of this.facilities) {
+      const events = (this.liveBookingsOn(f, today) || []).filter((b) => this.isEventBooking(b));
+      if (!events.length) continue;
+      const key = `evt|${iso}|${f.ticqetEventId}`;
+      if (this.reminders.has(key)) continue;
+      const ranges = slotsToRanges(events.flatMap((b) => b.slots));
+      const start = ranges[0].startHour * 60;
+      if (cur < start - mins[0] || cur >= ranges[ranges.length - 1].endHour * 60) continue;
+      this.reminders.add(key);
+      store.saveReminders(this.reminders);
+      // Already reminded about it today (by an earlier version of the agent).
+      if (ranges.some((r) => mins.some((m) => this.reminders.has(`rem|${iso}|${f.ticqetEventId}|${r.startHour}|${m}`)))) continue;
+      await this.send('event-today', fmt.eventToday({ facility: f.name, date: today, ranges, readyBy: start - readyGap, started: cur >= start }), recipients(this.cfg, 'attendants'));
     }
   }
 
@@ -632,9 +781,9 @@ export class Engine {
   }
 
   async sendDaily(today, overnight = []) {
-    const sections = this.facilities.map((f) => ({ name: f.name, sessions: this.sessionsFor(f, today) }));
+    const sections = this.facilities.map((f) => ({ name: f.name, sessions: this.sessionsFor(f, today), carFree: this.carFreeOn(today, f.name) }));
     const dataOk = this.facilities.every((f) => this.dayKnown(f, today)) && this.healthy();
-    const text = fmt.dailyUpdate(today, sections, { overnight, dataOk, notes: this.notesFor(today, sections), umuganda: this.umugandaOn(today) });
+    const text = fmt.dailyUpdate(today, sections, { overnight, dataOk, notes: this.notesFor(today, sections), umuganda: this.umugandaOn(today), carFree: this.carFreeOn(today) });
     await this.send('daily', text, recipients(this.cfg, 'summaries'));
   }
 
@@ -645,7 +794,7 @@ export class Engine {
       name: f.name,
       days: days.map((d) => {
         if (!this.dayKnown(f, d)) dataOk = false;
-        return { label: WEEKDAYS[d.dow].slice(0, 3), sessions: this.sessionsFor(f, dateOf(d)), umuganda: this.umugandaOn(d) };
+        return { label: WEEKDAYS[d.dow].slice(0, 3), sessions: this.sessionsFor(f, dateOf(d)), umuganda: this.umugandaOn(d), carFree: this.carFreeOn(d, f.name) };
       }),
     }));
     const range = `${shortDate(days[0].y, days[0].m, days[0].d)} - ${shortDate(days[6].y, days[6].m, days[6].d)}`;
@@ -699,7 +848,7 @@ export class Engine {
     const n = this.now();
     const todayIso = isoDate(this.today(n));
     const channel = this.settings.channel;
-    for (const c of rows) {
+    for (let c of rows) {
       if (c.problem) {
         status.set(c.row, `Problem: ${c.problem}`);
         continue;
@@ -708,9 +857,22 @@ export class Engine {
         status.set(c.row, 'Date has passed - no longer used.');
         continue;
       }
+      if (c.kind === 'ignore') {
+        status.set(c.row, this.ignoreStatus(c));
+        continue;
+      }
       if (c.date === todayIso && c.kind === 'moved' && c.endHour * 60 <= this.minuteOfDay(n)) {
         status.set(c.row, `Over: ${c.summary} That time has passed, so it is not emailed.`);
         continue;
+      }
+      if (c.kind === 'carfree') {
+        const span = this.carFreeSpan(c);
+        const where = c.facility ? ` at ${c.facility}` : '';
+        if (c.date === todayIso && span.end <= this.minuteOfDay(n)) {
+          status.set(c.row, `Over: Car-free day${where} ${fmt.minuteSpan(span.start, span.end)} has passed.`);
+          continue;
+        }
+        c = { ...c, span, summary: `Car-free day${where}, ${fmt.minuteSpan(span.start, span.end)}: shown in the daily update; the admin hears up to 3 days before about sessions booked during it.` };
       }
       let text = `OK: ${c.summary}`;
       if (!c.email) {
@@ -826,6 +988,37 @@ export class Engine {
     }
   }
 
+  // Car-free days (from the Schedule Changes tab): after the morning update, up
+  // to 3 days before, tell the admin about sessions booked during it, once. Not
+  // only in the morning, because the City announces the date only a few days
+  // ahead and the row may be added late.
+  async carFreeHeadsUp() {
+    const n = this.now();
+    if (this.inQuietHours(n)) return;
+    const today = this.today(n);
+    if (!this.morningDone(today, n)) return;
+    for (let i = 1; i <= CAR_FREE_NOTICE_DAYS; i++) {
+      const date = addDays(today, i);
+      const iso = isoDate(date);
+      if (!this.changes.some((c) => c.kind === 'carfree' && c.date === iso)) continue;
+      const key = `carfree|${iso}`;
+      if (this.jobs[key]) continue;
+      const items = [];
+      for (const f of this.facilities) {
+        const span = this.carFreeOn(date, f.name);
+        if (!span) continue;
+        if (!this.dayKnown(f, date)) return; // wait until Ticqet has been read
+        for (const s of this.sessionsFor(f, date)) {
+          if (!s.off && !s.event && s.startHour * 60 < span.end && s.endHour * 60 > span.start) items.push({ ...s, facility: f.name });
+        }
+      }
+      this.jobs[key] = this.stamp();
+      this.saveJobs();
+      if (!items.length) continue; // nothing booked during it: no message needed
+      await this.adminAlert('carfree', fmt.carFreeHeadsUp(date, this.carFreeOn(date), items));
+    }
+  }
+
   // Is Ticqet being read right now?
   healthy() {
     const thr = (this.settings.technicalAlertAfterMinutes ?? 15) * 60000;
@@ -919,7 +1112,7 @@ export class Engine {
     if (!(this.settings.eventMinHours > 0)) return out;
     for (const d of dateWindow(this.today(), days)) {
       for (const f of this.facilities) {
-        const list = (this.bookingsOn(f, d) || []).filter((b) => this.isEventBooking(b));
+        const list = (this.liveBookingsOn(f, d) || []).filter((b) => this.isEventBooking(b));
         if (!list.length) continue;
         const ranges = slotsToRanges(list.flatMap((b) => b.slots));
         out.push(`${shortDate(d.y, d.m, d.d)}: ${f.name} ${ranges.map((r) => compactRange(r.startHour, r.endHour)).join(' + ')}`);
@@ -938,7 +1131,7 @@ export class Engine {
     for (const k of [...this.reminders]) if ((k.split('|')[1] || '') < remCut) this.reminders.delete(k);
     const jobCut = cutoff(14);
     for (const k of Object.keys(this.jobs)) {
-      const m = k.match(/^(?:morning|sent|capNotice|alertsPaused|open|late|event|chg|chgid|umuganda)\|(\d{4}-\d{2}-\d{2})/);
+      const m = k.match(/^(?:morning|sent|capNotice|alertsPaused|open|late|event|chg|chgid|umuganda|carfree|ign)\|(\d{4}-\d{2}-\d{2})/);
       if (m && m[1] < jobCut) delete this.jobs[k];
     }
     this.jobs.lastPrune = iso;
