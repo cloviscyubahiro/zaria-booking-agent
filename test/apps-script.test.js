@@ -217,7 +217,7 @@ const DEFAULTS = {
     { client: 'LOCAL CHAMPIONS', facility: '5-a-side Pitch B', day: 'Saturday', start: '08:00', end: '10:00', type: 'Monthly', from: '2026-10-09', until: '2026-10-31' },
   ],
   contacts: [
-    { name: 'Jimmy', role: 'Operations', alerts: true, summaries: true, reminders: false, admin: false },
+    { name: 'Jimmy', role: 'Operations', alerts: true, summaries: true, reminders: false, admin: false, freeSlots: true },
     { name: 'Alex', role: 'Attendant', alerts: true, summaries: true, reminders: true, admin: false },
     { name: 'Clovis', role: 'Admin', alerts: false, summaries: false, reminders: false, admin: true },
   ],
@@ -264,13 +264,15 @@ test('setup creates the tabs and the 5-minute timer; the first check is silent',
 
   const contacts = g.sheet('Contacts').rows();
   assert.deepEqual(contacts[3].slice(5, 7), ['Reminder 1 (60 min before)', 'Reminder 2 (15 min before)']);
-  assert.deepEqual(contacts[4], ['Jimmy', 'Operations', '', true, true, false, false, false]);
+  assert.deepEqual(contacts[4], ['Jimmy', 'Operations', '', true, true, false, false, false, true]);
+  assert.equal(contacts[3][8], 'Free slots');
   assert.deepEqual(contacts[5].slice(0, 7), ['Alex', 'Attendant', '', true, true, true, true]);
   assert.equal(g.sheet('Settings').get(g.sheet('Settings').find('Channel'), 2), 'Preview');
-  assert.deepEqual(g.sheet('Settings').rows().slice(-3).map((r) => r.slice(0, 2)), [
+  assert.deepEqual(g.sheet('Settings').rows().slice(-4).map((r) => r.slice(0, 2)), [
     ['Event day: one booking of at least (hours)', '6'],
     ['Umuganda (last Saturday of the month)', '08:00-11:00'],
     ['Car-free day hours', '07:00-10:00'],
+    ['Free slots: opening hours', '08:00-23:00'],
   ]);
   assert.deepEqual(g.sheet('Facilities').rows().slice(3).map((r) => r.slice(0, 3)), [
     ['Multi-Purpose Court', COURT, 'Yes'],
@@ -452,9 +454,10 @@ test('a sheet made before the split gets Reminder 1 and Reminder 2 columns, with
   g.at('2026-10-08T08:05:00Z');
   await g.run('runAgent');
   assert.deepEqual(sh.rows()[3], ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates',
-    'Reminder 1 (60 min before)', 'Reminder 2 (15 min before)', 'Admin alerts']);
-  assert.deepEqual(sh.rows()[5], ['Alex', 'Attendant', 'alex@gmail.com', true, true, true, true, false], 'same ticks in both');
-  assert.deepEqual(sh.rows()[6].slice(5), [false, false, true], 'Admin alerts moved one column right, still ticked');
+    'Reminder 1 (60 min before)', 'Reminder 2 (15 min before)', 'Admin alerts', 'Free slots']);
+  assert.deepEqual(sh.rows()[5], ['Alex', 'Attendant', 'alex@gmail.com', true, true, true, true, false, false], 'same ticks in both');
+  assert.deepEqual(sh.rows()[6].slice(5), [false, false, true, false], 'Admin alerts moved one column right, still ticked');
+  assert.equal(sh.rows()[4][8], true, 'Free slots ticked for Jimmy, as the build says');
 
   // The team then moves the 60-min reminder to Jimmy, and keeps Alex on the 15-min one.
   sh.set(5, 6, true);
@@ -561,10 +564,11 @@ test('the sheet the court-only version made is upgraded in place, and the pitche
     ['5-a-side Pitch B', PITCH_B, 'Yes', ''],
   ]);
   assert.match(g.sheet('Facilities').get(2, 1), /^Every facility with Watch = Yes is watched/);
-  assert.deepEqual(g.sheet('Settings').rows().slice(-3).map((r) => r.slice(0, 2)), [
+  assert.deepEqual(g.sheet('Settings').rows().slice(-4).map((r) => r.slice(0, 2)), [
     ['Event day: one booking of at least (hours)', '6'],
     ['Umuganda (last Saturday of the month)', '08:00-11:00'],
     ['Car-free day hours', '07:00-10:00'],
+    ['Free slots: opening hours', '08:00-23:00'],
   ]);
   assert.equal(g.sheet('Settings').get(4, 2), 'Email', 'the channel is kept');
   const log = g.sheet('Bookings Log').rows();
@@ -577,6 +581,8 @@ test('the sheet the court-only version made is upgraded in place, and the pitche
   ]);
   assert.equal(g.status()['Mistakes in the sheet'], 'None');
   assert.ok(!g.sent.some((m) => m.subject === 'Settings problem'), 'no false alarm about the missing IDs');
+  const ct = g.sheet('Contacts').rows();
+  assert.deepEqual([ct[3][8], ct[4][8], ct[5][8], ct[6][8]], ['Free slots', true, false, false], 'a Free slots column, ticked for Jimmy as the build says');
 
   // Only the pitches' bookings are new to the log; the court's were known.
   const added = log.slice(3);

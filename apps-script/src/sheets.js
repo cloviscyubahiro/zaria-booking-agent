@@ -179,6 +179,7 @@ const SETTING_ROWS_ADDED = [
   ['Event day: one booking of at least (hours)', (s) => String(s.eventMinHours), 'A booking this long is an event or setup: the team and the admin are told the day before, with the teams to call. 0 = off.'],
   ['Umuganda (last Saturday of the month)', (s) => (s.umuganda ? `${s.umuganda.start}-${s.umuganda.end}` : ''), 'Shown in the daily update. The admin hears 3 days before about sessions booked during Umuganda. Empty = off.'],
   ['Car-free day hours', (s) => (s.carFreeDay ? `${s.carFreeDay.start}-${s.carFreeDay.end}` : '07:00-10:00'), 'Its date changes, so add each car-free day on the Schedule Changes tab (Date, and Car-free day as the message). Shown in the daily update; the admin hears up to 3 days before about sessions booked during it.'],
+  ['Free slots: opening hours', (s) => (s.openingHours ? `${s.openingHours.start}-${s.openingHours.end}` : '08:00-23:00'), 'The hours the facilities can be booked. Each morning, the people ticked in the Free slots column (Contacts tab) get the free hours between these times, for 7 days. 00:00 = midnight.'],
 ];
 
 const BUILDERS = {
@@ -213,16 +214,16 @@ const BUILDERS = {
   },
 
   [TABS.contacts](sh, defaults) {
-    title(sh, 'Who gets the emails', 'One person per row. Tick what each person gets. Admin alerts = possible double-bookings, technical problems, regular hours left open on Ticqet.');
+    title(sh, 'Who gets the emails', 'One person per row. Tick what each person gets. Admin alerts = possible double-bookings, technical problems, regular hours left open on Ticqet. Free slots = each morning, the hours still free to offer clients.');
     const [m1, m2] = reminderLabels(defaults.settings);
-    header(sh, 4, ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', m1, m2, 'Admin alerts'],
-      [140, 170, 250, 110, 120, 120, 120, 100]);
+    header(sh, 4, ['Name', 'Role', 'Email', 'New booking alerts', 'Daily & weekly updates', m1, m2, 'Admin alerts', 'Free slots'],
+      [140, 170, 250, 110, 120, 120, 120, 100, 100]);
     const rows = defaults.contacts.map((c) => [
       c.name || '', c.role || '', c.email || '', !!c.alerts, !!c.summaries,
-      !!(c.reminder1 ?? c.reminders), !!(c.reminder2 ?? c.reminders), !!c.admin,
+      !!(c.reminder1 ?? c.reminders), !!(c.reminder2 ?? c.reminders), !!c.admin, !!c.freeSlots,
     ]);
-    sh.getRange(5, 4, 20, 5).insertCheckboxes();
-    if (rows.length) sh.getRange(5, 1, rows.length, 8).setValues(rows);
+    sh.getRange(5, 4, 20, 6).insertCheckboxes();
+    if (rows.length) sh.getRange(5, 1, rows.length, 9).setValues(rows);
     rows.forEach((r, i) => {
       if (!r[2]) sh.getRange(5 + i, 3).setBackground(FILL_ME); // email still to fill in
     });
@@ -354,6 +355,34 @@ export function upgradeContacts(ss, settings) {
   sh.setColumnWidth(col, 120);
   sh.setColumnWidth(col + 1, 120);
   return true;
+}
+
+// Sheets made before the free slots email have no "Free slots" column: add it
+// after the last column, ticked for the people the build names (by first name,
+// so "David" also finds "David Mamboleo"). Returns what was done.
+export function upgradeContactsFreeSlots(ss, contacts = []) {
+  const sh = ss.getSheetByName(TABS.contacts);
+  if (!sh) return [];
+  const values = sh.getDataRange().getValues();
+  const hi = values.findIndex((r) => r.some((v) => norm(v) === 'email' || norm(v) === 'number'));
+  if (hi < 0) return [];
+  const head = values[hi].map(norm);
+  if (head.includes('free slots')) return [];
+  const cName = head.indexOf('name');
+  let last = head.length;
+  while (last > 0 && !head[last - 1]) last -= 1;
+  const col = last + 1; // 1-based, right after the last header
+  sh.getRange(hi + 1, col).setValue('Free slots')
+    .setFontWeight('bold').setFontColor('#ffffff').setBackground(NAVY).setWrap(true);
+  sh.setColumnWidth(col, 100);
+  const first = (v) => norm(v).split(/\s+/)[0];
+  const want = new Set(contacts.filter((c) => c.freeSlots && c.name).map((c) => first(c.name)));
+  const picked = (r) => !!r && cName >= 0 && !!first(r[cName]) && want.has(first(r[cName]));
+  const rows = Math.max(values.length - hi - 1, 20);
+  const ticks = Array.from({ length: rows }, (_, i) => [picked(values[hi + 1 + i])]);
+  sh.getRange(hi + 2, col, rows, 1).insertCheckboxes().setValues(ticks);
+  const named = values.slice(hi + 1).filter(picked).map((r) => String(r[cName]).trim());
+  return [`Contacts: added a Free slots column${named.length ? ` (ticked for ${named.join(' and ')})` : ''}`];
 }
 
 // Fill in the Ticqet ID of known facilities (the pitches, back on sale), and
@@ -531,6 +560,7 @@ export function upgradeSheet(ss, { settings, prefill, props }) {
     return created.length ? `created the tab(s) ${created.join(', ')}` : [];
   });
   step('Contacts', () => (upgradeContacts(ss, settings) ? 'Contacts: reminders now have one column each' : []));
+  step('Contacts (free slots)', () => upgradeContactsFreeSlots(ss, prefill.contacts || []));
   step('Facilities', () => upgradeFacilities(ss, known));
   step('Settings', () => upgradeSettings(ss, settings));
   step('Bookings Log', () => upgradeBookingsLog(ss, settings.court.name));

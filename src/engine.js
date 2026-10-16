@@ -18,6 +18,7 @@
 //               on an event day ONE "event today" message instead of reminders
 //               before every part of the event booking
 //   summaries   daily update, or the weekly overview on its day
+//   freeSlots   each morning, the hours still free to offer clients (7 days)
 //   team+admin  event days (one booking of many hours): the day before, with the
 //               teams to call because the facility is not available
 //   everyone    schedule changes the admin writes on the sheet (car-free day...)
@@ -34,7 +35,7 @@ import {
   isoDate, dayFromIso, dayFromLabel, daysBetween, shortDate, clockLabelMinutes,
   compactRange, addDays, isLastSaturday, joinNames, formatRange,
 } from './time.js';
-import { planForDate, windowHolding, lapsedRegularHours, buildSessions } from './regulars.js';
+import { planForDate, windowHolding, lapsedRegularHours, buildSessions, isBookedEnough } from './regulars.js';
 import { recipients, adminName, channelName } from './config.js';
 import { sameName } from './facilities.js';
 
@@ -53,6 +54,7 @@ const MORNING_GRACE_MIN = 180; // send the morning update up to 3 h late, never 
 const MORNING_DATA_WAIT_MIN = 15; // wait this long for fresh Ticqet data before the morning update
 const UMUGANDA_NOTICE_DAYS = 3; // the admin hears about sessions during Umuganda up to 3 days before
 const CAR_FREE_NOTICE_DAYS = 3; // ... and during a car-free day
+const FREE_SLOT_DAYS = 7; // the free slots email covers today and the next 6 days
 
 const dateOf = (d) => ({ y: d.y, m: d.m, d: d.d, label: d.label });
 const sameDay = (a, b) => a.y === b.y && a.m === b.m && a.d === b.d;
@@ -246,11 +248,15 @@ export class Engine {
     return new Set(Object.keys(this.jobs).filter((k) => k.startsWith(prefix)).map((k) => k.slice(prefix.length)));
   }
 
+  // Once Ticqet has been read for the date, a regular whose usual hours are not
+  // booked there at all is left out (the admin's morning note lists it).
   sessionsFor(f, date) {
-    return buildSessions(this.liveBookingsOn(f, date) || [], this.regulars, date, f.name, {
+    const live = this.liveBookingsOn(f, date);
+    return buildSessions(live || [], this.regulars, date, f.name, {
       changes: this.changes,
       eventMinHours: this.settings.eventMinHours,
       exempt: this.lateIds(f, date),
+      onlyBooked: live !== undefined,
     });
   }
 
@@ -447,10 +453,17 @@ export class Engine {
         eventAdds.push(b);
       } else if (win) {
         // Fully inside a regular's hours. Exactly their block: Zaria blocking the
-        // slot for them - nothing to report. Only part of it: could be a customer
-        // booking a regular's hour that was left open - the admin checks it.
+        // slot for them - nothing to report, unless the admin was told these
+        // hours were open on Ticqet (then a customer may have booked them).
+        // Only part of it: could be a customer booking a regular's hour that
+        // was left open - the admin checks it.
         if (b.slots.length === win.endHour - win.startHour) {
-          log.info(`[engine] ${regular}'s slot blocked on ${b.facility}, ${b.date.label} - no alert`);
+          if (this.jobs[`open|${isoDate(b.date)}|${b.facilityId}|${regular}|${win.startHour}`]) {
+            log.info(`[engine] ${regular}'s open slot booked on ${b.facility}, ${b.date.label} - asking admin to check`);
+            checks.push({ booking: b, client: regular, inside: true });
+          } else {
+            log.info(`[engine] ${regular}'s slot blocked on ${b.facility}, ${b.date.label} - no alert`);
+          }
         } else {
           log.info(`[engine] booking inside ${regular}'s usual slot on ${b.facility}, ${b.date.label} - asking admin to check`);
           checks.push({ booking: b, client: regular, inside: true });
@@ -758,6 +771,7 @@ export class Engine {
     const overnight = this.takeDeferred('team').flatMap((d) => d.lines);
     if (weekly) await this.sendWeekly(today, overnight);
     else await this.sendDaily(today, overnight);
+    await this.sendFreeSlots(today);
     await this.flushAdminDeferred();
     await this.openSlotsDigest(today);
     await this.renewals(today);
@@ -799,6 +813,49 @@ export class Engine {
     }));
     const range = `${shortDate(days[0].y, days[0].m, days[0].d)} - ${shortDate(days[6].y, days[6].m, days[6].d)}`;
     await this.send('weekly', fmt.weeklyOverview(range, sections, { overnight, dataOk }), recipients(this.cfg, 'summaries'));
+  }
+
+  // Hours a facility can still be offered on a date, within the opening hours
+  // (Settings): not booked on Ticqet, not a regular client's usual hours (even
+  // when not blocked on Ticqet, so nobody is offered a regular's slot), not
+  // during Umuganda, and not started yet. null if Ticqet has not been read.
+  freeHoursOn(f, date, n = this.now()) {
+    const list = this.bookingsOn(f, date); // with bookings to ignore: Ticqet still holds them
+    if (list === undefined) return null;
+    const { open, close } = this.openingHours();
+    const taken = new Set(list.flatMap((b) => b.slots));
+    for (const w of this.plan(f.name, date).windows) for (let h = w.startHour; h < w.endHour; h++) taken.add(h);
+    const u = this.umugandaOn(date);
+    const cur = sameDay(date, this.today(n)) ? this.minuteOfDay(n) : -1;
+    const free = [];
+    for (let h = open; h < close; h++) {
+      if (taken.has(h) || h * 60 < cur) continue;
+      if (u && h * 60 < u.end && (h + 1) * 60 > u.start) continue;
+      free.push(h);
+    }
+    return slotsToRanges(free);
+  }
+
+  // Opening hours as whole hours; a closing time of 00:00 means midnight.
+  openingHours() {
+    const o = this.settings.openingHours;
+    const close = Math.ceil(hhmmToMinutes(o.end) / 60);
+    return { open: Math.floor(hhmmToMinutes(o.start) / 60), close: close === 0 ? 24 : close };
+  }
+
+  // Each morning, to the people who offer clients playing time: the hours
+  // still free at every facility, today and the next 6 days.
+  async sendFreeSlots(today) {
+    const to = recipients(this.cfg, 'freeSlots');
+    if (!to.length) return;
+    const n = this.now();
+    const days = dateWindow(today, FREE_SLOT_DAYS);
+    const sections = this.facilities.map((f) => ({
+      name: f.name,
+      days: days.map((d) => ({ date: dateOf(d), free: this.freeHoursOn(f, dateOf(d), n), carFree: this.carFreeOn(d, f.name) })),
+    }));
+    const { open, close } = this.openingHours();
+    await this.send('free-slots', fmt.freeSlots(sections, { open, close, asOf: clockLabelMinutes(this.minuteOfDay(n)) }), to);
   }
 
   // Alerts held overnight normally ride along with the morning update. If that
@@ -921,11 +978,12 @@ export class Engine {
         if (known === undefined) continue; // not read: do not guess
         const booked = new Set(known.flatMap((b) => b.slots));
         for (const lr of lapsedRegularHours(this.regulars, date, f.name, booked, this.changes)) {
+          const hidden = !isBookedEnough(lr, lr.openHours); // left out of the team's messages
           for (const r of slotsToRanges(lr.openHours)) {
             const key = `open|${isoDate(date)}|${f.ticqetEventId}|${lr.client}|${r.startHour}`;
             if (this.jobs[key]) continue;
             this.jobs[key] = true;
-            items.push({ day: date, facility: f.name, client: lr.client, range: r });
+            items.push({ day: date, facility: f.name, client: lr.client, range: r, hidden });
           }
         }
       }

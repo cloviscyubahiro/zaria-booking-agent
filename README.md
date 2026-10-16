@@ -87,9 +87,12 @@ One row per change on the **Schedule Changes** tab:
 | Last-minute booking | A booking that starts within the hour: one message instead of the reminders | Either reminder = Yes |
 | Event day | The day before an event or setup (one booking of 6+ hours), with the teams to call; also when such a booking is made | New booking alerts = Yes, and Admin alerts = Yes |
 | Schedule change | When the admin ticks *Email everyone* on the Schedule Changes tab | Everyone |
-| Admin alerts | A booking for part of a regular client's slot, or overlapping it (possible double-booking); regular hours still open on Ticqet (each morning); renewals 3 days before Until dates (one email); sessions booked during Umuganda or a car-free day (3 days before); Ticqet unreadable for 15 min (and when it's back); a mistake in the sheet or a wrong Ticqet ID | Admin alerts = Yes |
+| Free slots | Every morning (with the daily update): for each facility, the hours still free today and the next 6 days, within the opening hours (*Settings*, "Free slots: opening hours", 8 AM-11 PM). Not free: hours booked on Ticqet, a regular client's usual hours (even if not blocked on Ticqet), Umuganda | Free slots = Yes (for the people who offer clients playing time) |
+| Admin alerts | A booking for part of a regular client's slot, or overlapping it (possible double-booking), or for exactly a regular slot the morning note said was open; regular hours still open on Ticqet (each morning); renewals 3 days before Until dates (one email); sessions booked during Umuganda or a car-free day (3 days before); Ticqet unreadable for 15 min (and when it's back); a mistake in the sheet or a wrong Ticqet ID | Admin alerts = Yes |
 
 Regular clients (booked directly with Zaria) are never announced as new bookings; they appear by name in the updates and reminders. A Ticqet booking that is exactly a regular client's usual hours is Zaria blocking the slot for them, so it is logged without a message.
+
+**Ticqet decides who plays.** A regular client is in the team's updates and reminders only when their hours are blocked on Ticqet (all or part of them), or when a Schedule Changes row moves them to new hours that date. If none of their usual hours are booked on Ticqet, the team is not told about them: the admin's morning note "Regular hours not booked on Ticqet" lists them instead. So a Regular Clients row that is out of date (a team whose hours changed, or who stopped) never reaches the team. Clients who book only when they ask (for example a team that emails for a Friday slot when they are free) do not belong on Regular Clients: their Ticqet booking is announced like any other.
 
 ## Quick start (Ubuntu server)
 

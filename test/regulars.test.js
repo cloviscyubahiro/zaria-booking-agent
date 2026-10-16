@@ -50,6 +50,21 @@ test('buildSessions merges a regular block split across records, and adds unbloc
   ]);
 });
 
+test('buildSessions with onlyBooked: a regular with none of its hours on Ticqet is left out', () => {
+  const regs = [
+    { client: 'RwandAir', facility: 'Multi-Purpose Court', day: 'Monday', start: '17:00', end: '19:00' },
+    { client: 'Oxygen 250', facility: 'Multi-Purpose Court', day: 'Monday', start: '19:00', end: '21:00' },
+  ];
+  const mon = { y: 2026, m: 10, d: 5 };
+  const bookings = [bookingFromDoc({ id: 'a', seats: ['17'] }, mon)];
+  assert.deepEqual(buildSessions(bookings, regs, mon, 'Multi-Purpose Court', { onlyBooked: true }), [
+    { startHour: 17, endHour: 19, client: 'RwandAir' }, // part blocked: still shown whole
+  ]);
+  // Ticqet not read for the date: the list is all there is.
+  assert.equal(buildSessions([], regs, mon, 'Multi-Purpose Court').length, 2);
+  assert.equal(buildSessions([], regs, mon, 'Multi-Purpose Court', { onlyBooked: true }).length, 0);
+});
+
 test('regularsOverlapping finds partial overlaps', () => {
   const b = bookingFromDoc({ id: 'x', seats: ['18', '19'] }, TUE);
   assert.deepEqual(regularsOverlapping(b, REGS, TUE, 'Multi-Purpose Court').map((r) => r.client), ['MTN']);

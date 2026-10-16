@@ -146,3 +146,19 @@ test('Google Sheet contacts: a bad or repeated email is an error naming the row'
   assert.ok(res.errors.some((e) => /row 4: "alex@gmail" is not a valid email/.test(e)), res.errors.join('\n'));
   assert.ok(res.errors.some((e) => /row 6: V@Gmail.com is listed twice/.test(e)), res.errors.join('\n'));
 });
+
+test('Google Sheet: the Free slots column and the opening hours setting', () => {
+  const sheets = googleSheet({ contacts: [] });
+  sheets[0].data[2].push('Free slots');
+  sheets[0].data.push(
+    ['David', 'Marketing Coordinator', 'david@example.com', 'Yes', 'Yes', 'No', 'No', 'Yes'],
+    ['Alex', 'Attendant', 'alex@example.com', 'Yes', 'Yes', 'Yes', 'No', 'No'],
+  );
+  sheets[2].data.push(['Free slots: opening hours', '07:00-00:00']);
+  const res = convertSheets(sheets);
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.contacts.map((c) => [c.name, c.freeSlots]), [['David', true], ['Alex', false]]);
+  assert.deepEqual(res.settings.openingHours, { start: '07:00', end: '00:00' });
+  // An older sheet without the row keeps the usual hours.
+  assert.deepEqual(convertSheets(googleSheet({ contacts: [] })).settings.openingHours, { start: '08:00', end: '23:00' });
+});

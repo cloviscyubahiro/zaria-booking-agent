@@ -132,6 +132,13 @@ export function regularsOverlapping(booking, regulars, date, facilityName, chang
   );
 }
 
+// Is a regular's window shown when Ticqet has been read for the date? Yes if
+// any of its hours are booked there (`open` = its hours that are not), or if a
+// Schedule Changes row moved it there that date (written for that very day).
+export function isBookedEnough(w, open) {
+  return open.length < w.endHour - w.startHour || (!!w.change && w.change.kind === 'moved');
+}
+
 // Consecutive hours -> [{ startHour, endHour }].
 function runs(hours) {
   const out = [];
@@ -147,7 +154,10 @@ function runs(hours) {
 //   - every Ticqet booking: an event or event setup when one booking is at
 //     least `eventMinHours` long; labelled with the regular client's name when
 //     it sits inside that client's hours; otherwise client = null;
-//   - regular clients' hours that are NOT on Ticqet (the regular still plays);
+//   - regular clients' hours that are NOT on Ticqet (the regular still plays) -
+//     with `onlyBooked` (the date was read from Ticqet), only if some of their
+//     hours are booked there or a Schedule Changes row moved them that date, so
+//     an out-of-date Regular Clients row never reaches the team;
 //   - regulars not playing that date (schedule change), marked `off`.
 // A Ticqet booking left in hours a regular gave up that date is marked `off`
 // too (no reminders) - unless its id is in `exempt` (booked after the change,
@@ -156,7 +166,7 @@ function runs(hours) {
 // 5-7 PM block counts as one session even if Ticqet stores it as two records.
 // Returns [{ startHour, endHour, client, event?, off?, change? }].
 export function buildSessions(bookings, regulars, date, facilityName, opts = {}) {
-  const { changes = [], eventMinHours = 0, exempt = new Set() } = opts;
+  const { changes = [], eventMinHours = 0, exempt = new Set(), onlyBooked = false } = opts;
   const { windows, off } = planForDate(regulars, date, facilityName, changes);
   const sessions = [];
   const bookedSlots = new Set();
@@ -181,6 +191,7 @@ export function buildSessions(bookings, regulars, date, facilityName, opts = {})
   for (const w of windows) {
     const open = [];
     for (let h = w.startHour; h < w.endHour; h++) if (!bookedSlots.has(h)) open.push(h);
+    if (onlyBooked && !isBookedEnough(w, open)) continue;
     for (const r of runs(open)) sessions.push({ ...r, client: w.client, ...withChange(w.change) });
   }
   // A regular not playing: shown, without reminders, so nobody waits for them.

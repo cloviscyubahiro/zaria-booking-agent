@@ -54,7 +54,7 @@ export function localDefaults(dir = path.join(root, 'config')) {
   const regulars = read('regular-clients.json') || read('regular-clients.example.json') || [];
   const contacts = (read('contacts.json') || []).map((c) => ({
     name: c.name || '', role: c.role || '', email: c.email || '',
-    alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin,
+    alerts: !!c.alerts, summaries: !!c.summaries, reminders: !!c.reminders, admin: !!c.admin, freeSlots: !!c.freeSlots,
     ...(c.reminder1 !== undefined ? { reminder1: !!c.reminder1, reminder2: !!c.reminder2 } : {}),
   }));
   const settings = read('settings.json') || {};

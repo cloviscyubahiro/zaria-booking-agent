@@ -311,6 +311,31 @@ export function weeklyOverview(rangeText, sections, { overnight = [], dataOk = t
   return lines.join('\n');
 }
 
+// Hours still free to offer clients (for the people who take their calls).
+// `sections` = one per facility: [{ name, days: [{ date, free, carFree? }] }],
+// `free` = [{ startHour, endHour }] or null (Ticqet not read for that date).
+// `open`/`close` = the opening hours; `asOf` = the time it was made.
+export function freeSlots(sections, { open, close, asOf }) {
+  const days = sections[0].days;
+  const lines = [
+    `${HEAD}: Free slots, ${dayText(days[0].date)} - ${dayText(days[days.length - 1].date)}`,
+    `Hours not booked on Ticqet and not a regular team's, between ${compactRange(open, close)}.`,
+  ];
+  for (const sec of sections) {
+    lines.push(`${sec.name}:`);
+    sec.days.forEach((d, i) => {
+      const label = `${i === 0 ? 'Today' : dayText(d.date)}${d.carFree ? ` (car-free day ${minuteSpan(d.carFree.start, d.carFree.end)})` : ''}`;
+      let what;
+      if (!d.free) what = 'not read from Ticqet - check Ticqet';
+      else if (!d.free.length) what = 'full';
+      else what = d.free.map((r) => compactRange(r.startHour, r.endHour)).join(', ');
+      lines.push(`${label}: ${what}`);
+    });
+  }
+  lines.push(`As of ${asOf}. Check Ticqet before you confirm a time: it may have been booked since.`);
+  return lines.join('\n');
+}
+
 // ---------- schedule changes (from the admin, via the sheet) ----------
 
 // One row of the Schedule Changes tab, as it is emailed to everyone.
@@ -398,11 +423,12 @@ export function openRegularSlots(items) {
   for (const it of items) {
     const k = dateNum(it.day);
     if (!byDay.has(k)) byDay.set(k, { day: it.day, parts: [] });
-    byDay.get(k).parts.push(`${it.facility} ${compactRange(it.range.startHour, it.range.endHour)} ${it.client}`);
+    byDay.get(k).parts.push(`${it.facility} ${compactRange(it.range.startHour, it.range.endHour)} ${it.client}${it.hidden ? '' : ' (rest booked)'}`);
   }
-  const lines = [`${HEAD}: Regular slots open on Ticqet`];
+  const lines = [`${HEAD}: Regular hours not booked on Ticqet`];
   for (const [, v] of [...byDay].sort((a, b) => a[0] - b[0])) lines.push(`${dayText(v.day)}: ${v.parts.join('; ')}`);
-  lines.push('Anyone can book these online. Block them on Ticqet, or set an Until date if the client stopped.');
+  if (items.some((it) => it.hidden)) lines.push('The team is not told about a session with nothing booked on Ticqet.');
+  lines.push('Anyone can book these hours online. If the client plays then, block them on Ticqet. If the hours changed, fix the Regular Clients tab. If the client stopped, set an Until date.');
   return lines.join('\n');
 }
 

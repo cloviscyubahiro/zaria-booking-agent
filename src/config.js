@@ -49,6 +49,9 @@ export const DEFAULT_SETTINGS = {
   // The usual hours of Kigali's car-free day. Its dates change, so the admin
   // writes each one on the Schedule Changes tab (Reason "Car-free day").
   carFreeDay: { start: '07:00', end: '10:00' },
+  // The hours the facilities can be booked, for the free slots email (a
+  // closing time of 00:00 = midnight).
+  openingHours: { start: '08:00', end: '23:00' },
 };
 
 const CHANNEL_ALIASES = {
@@ -167,6 +170,12 @@ export function withDefaults(raw = {}) {
   } else {
     s.carFreeDay = { ...DEFAULT_SETTINGS.carFreeDay }; // the dates come from Schedule Changes; the hours are needed
   }
+  if (s.openingHours) {
+    const { start, end } = s.openingHours;
+    if (!HHMM.test(String(start)) || !HHMM.test(String(end)) || (end <= start && end !== '00:00')) problems.push(`openingHours must be two 24-hour times like 08:00-23:00 (got "${start}-${end}").`);
+  } else {
+    s.openingHours = { ...DEFAULT_SETTINGS.openingHours };
+  }
 
   const wd = Number(s.watch?.windowDays);
   if (!Number.isInteger(wd) || wd < 1 || wd > 90) problems.push('watch.windowDays must be between 1 and 90.');
@@ -220,7 +229,7 @@ export function cleanContacts(rows) {
     // reminder before a session. The older single "reminders" tick means both.
     const r1 = !!(c.reminder1 ?? c.reminders);
     const r2 = !!(c.reminder2 ?? c.reminders);
-    const flags = { alerts: !!c.alerts, summaries: !!c.summaries, reminders: r1 || r2, reminder1: r1, reminder2: r2, admin: !!c.admin };
+    const flags = { alerts: !!c.alerts, summaries: !!c.summaries, reminders: r1 || r2, reminder1: r1, reminder2: r2, admin: !!c.admin, freeSlots: !!c.freeSlots };
     const prev = (phone && byAddress.get(phone)) || (email && byAddress.get(email));
     if (prev) {
       log.warn(`[config] ${c.number || c.email} is listed twice - merged.`);
@@ -295,9 +304,10 @@ export function configChanged(cfg) {
 //   attendants -> either reminder              (last-minute bookings)
 //   summaries  -> "Daily & weekly updates" = Yes
 //   admin      -> "Admin alerts" = Yes         (technical, clash, renewal, checks)
+//   freeSlots  -> "Free slots" = Yes           (hours still free to offer clients)
 //   everyone   -> every listed contact         (welcome message)
 // An older contact with only "reminders" (Attendant reminders) gets both reminders.
-const GROUP_FLAG = { team: 'alerts', summaries: 'summaries', admin: 'admin' };
+const GROUP_FLAG = { team: 'alerts', summaries: 'summaries', admin: 'admin', freeSlots: 'freeSlots' };
 
 function inGroup(c, group) {
   if (group === 'everyone') return true;

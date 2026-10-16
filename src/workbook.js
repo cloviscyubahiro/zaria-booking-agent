@@ -94,6 +94,7 @@ const SETTINGS_ROWS = [
   ['event day', (v, s) => { s.eventMinHours = str(v) === '' ? 0 : Number(v); }],
   ['umuganda', (v, s) => { s.umuganda = toSpan(v); }],
   ['car-free day', (v, s) => { s.carFreeDay = toSpan(v); }],
+  ['free slots', (v, s) => { s.openingHours = toSpan(v); }],
 ];
 
 // "08:00-11:00" -> { start: '08:00', end: '11:00' }; empty or "No" -> null.
@@ -210,6 +211,7 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
       // Separate columns per reminder ("Reminder 1 (60 min before)", "Reminder 2 ...")
       // replace the single "Attendant reminders" column when present.
       reminder1: ct.col('reminder 1'), reminder2: ct.col('reminder 2'),
+      freeSlots: ct.col('free slots'),
     };
     const split = c.reminder1 >= 0 || c.reminder2 >= 0;
     const cell = (r, i) => (i >= 0 ? str(r[i]) : '');
@@ -248,6 +250,7 @@ export function convertSheets(sheets, baseSettings = DEFAULT_SETTINGS) {
         reminders: split ? r1 || r2 : yes(r[c.reminders]),
         ...(split ? { reminder1: r1, reminder2: r2 } : {}),
         admin: yes(r[c.admin]),
+        ...(c.freeSlots >= 0 ? { freeSlots: yes(r[c.freeSlots]) } : {}),
       });
       contactRows.push({ excelRow, who });
     }

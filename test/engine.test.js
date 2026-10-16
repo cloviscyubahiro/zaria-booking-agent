@@ -296,12 +296,43 @@ test('split reminders: a colleague gets the 60-min one, the attendant the 15-min
   assert.match(phone.kind('reminder')[0].text, /Starts in 15 min/);
 });
 
-test('regulars not blocked on Ticqet still get reminders (the list is the truth for regulars)', async () => {
-  const { clock, phone, engine } = setup({ at: '2026-10-06T15:00:00Z' });
-  await engine.tick(); // Ticqet shows nothing today
+test('a regular with nothing booked on Ticqet is left out of the team\'s messages; the admin is told', async () => {
+  // The Regular Clients tab still says MTN 5-7 PM, but MTN's hours moved to
+  // 7-9 PM on Ticqet and the tab was not updated (as on 13 Oct).
+  const { clock, ticqet, phone, engine } = setup({ at: '2026-10-06T06:00:00Z' });
+  ticqet.set(TUE6, [{ id: 'mtn-new', seats: ['19', '20'] }]);
+  await engine.tick();
+  clock.set('2026-10-06T06:30:00Z');
+  await engine.minuteTick();
+  const daily = phone.kind('daily')[0].text;
+  assert.doesNotMatch(daily, /MTN|5:00/);
+  assert.match(daily, /7:00-9:00 PM/);
+  const open = phone.kind('open-regular-slots');
+  assert.deepEqual(to(open), [ADMIN]);
+  assert.match(open[0].text, /^ZARIA COURT: Regular hours not booked on Ticqet\nTue 6 Oct: Multi-Purpose Court 5-7PM MTN\n/);
+  assert.match(open[0].text, /\nThe team is not told about a session with nothing booked on Ticqet\.\n.*fix the Regular Clients tab/);
+  for (const t of ['16:00', '16:45', '18:00', '18:45']) {
+    clock.set(`2026-10-06T${t}:00Z`);
+    await engine.minuteTick();
+  }
+  const rem = phone.kind('reminder');
+  assert.equal(rem.length, 2, 'the 7 PM booking only');
+  assert.ok(rem.every((m) => /Multi-Purpose Court, (today )?7:00-9:00 PM: Ticqet booking\./.test(m.text) && !/MTN|5:00/.test(m.text)));
+});
+
+test('a regular whose hours are blocked on Ticqet, or moved there that date, is in the messages', async () => {
+  const { clock, ticqet, phone, engine } = setup({ at: '2026-10-06T15:00:00Z' });
+  ticqet.set(TUE6, [{ id: 'part', seats: ['17'] }]); // only part of 5-7 PM blocked
+  await engine.tick();
   clock.set('2026-10-06T16:00:00Z');
   await engine.minuteTick();
-  assert.match(phone.kind('reminder')[0].text, /MTN \(regular client\)/);
+  assert.match(phone.kind('reminder')[0].text, /Multi-Purpose Court, today 5:00-7:00 PM: MTN \(regular client\)\./);
+  // Moved on the Schedule Changes tab: shown even before Ticqet is changed.
+  const s = setup({ at: '2026-10-13T17:00:00Z', changes: [{ date: '2026-10-13', client: 'MTN', newTime: '19:00-21:00', reason: 'Late start' }] });
+  await s.engine.tick();
+  s.clock.set('2026-10-13T18:00:00Z');
+  await s.engine.minuteTick();
+  assert.match(s.phone.kind('reminder')[0].text, /Multi-Purpose Court, today 7:00-9:00 PM: MTN \(regular client\) - moved from 5:00-7:00 PM/);
 });
 
 test('quiet hours: alerts are held and ride along with the daily update', async () => {
@@ -325,6 +356,7 @@ test('quiet hours: alerts are held and ride along with the daily update', async 
 
 test('on Monday the weekly overview replaces the daily and carries the overnight alerts', async () => {
   const { clock, ticqet, phone, engine } = setup({ at: '2026-10-11T23:30:00Z' }); // Sunday night
+  ticqet.set(TUE13, [{ id: 'mtn13', seats: ['17', '18'] }]);
   await engine.tick();
   ticqet.add(THU15, { id: 'sun-night', seats: ['18'] });
   await engine.tick();
@@ -578,7 +610,8 @@ test('sessions starting together at different facilities share one reminder', as
 test('daily update covers every facility', async () => {
   const { ticqet, phone, engine } = setup({ at: '2026-10-10T06:30:00Z', settings: { facilities: FACILITIES }, regulars: PITCH_REGULARS });
   ticqet.set(SAT10, [{ id: 'ev', seats: hours(7, 24) }]);
-  ticqet.set(SAT10, [{ id: 'is', seats: ['18', '19'] }], PITCH_A);
+  ticqet.set(SAT10, [{ id: 'lc', seats: ['8', '9'] }, { id: 'is', seats: ['18', '19'] }], PITCH_A);
+  ticqet.set(SAT10, [{ id: 'lcb', seats: ['8', '9'] }, { id: 'isb', seats: ['18', '19'] }], PITCH_B);
   await engine.tick();
   await engine.minuteTick();
   const daily = phone.kind('daily')[0].text;
@@ -642,6 +675,7 @@ test('event booked: alert with the teams to call; for tomorrow it is the day-bef
 test('an event booked overnight: in the morning update, and a same-day call list if teams play later', async () => {
   const regulars = [...COURT_REGULARS, { client: 'Weekend Club', facility: 'Multi-Purpose Court', day: 'Saturday', start: '18:00', end: '20:00', type: 'Monthly', from: null, until: null }];
   const { clock, ticqet, phone, engine } = setup({ at: '2026-10-09T23:30:00Z', regulars });
+  ticqet.set(SAT10, [{ id: 'wc', seats: ['18', '19'] }]);
   await engine.tick();
   ticqet.add(SAT10, { id: 'ev', seats: hours(7, 17) });
   await engine.tick();
@@ -737,6 +771,7 @@ test('a team not playing gets no reminder; a booking made later in those hours i
 test('Umuganda: the admin hears 3 days before about sessions booked during it', async () => {
   const s = setup({ at: '2026-10-28T06:30:00Z', settings: { facilities: FACILITIES }, regulars: PITCH_REGULARS });
   s.ticqet.set(SAT31, [{ id: 'lc', seats: ['8', '9'] }], PITCH_A);
+  s.ticqet.set(SAT31, [{ id: 'lcb', seats: ['8', '9'] }], PITCH_B);
   await s.engine.tick();
   await s.engine.minuteTick();
   const u = s.phone.kind('umuganda');
@@ -853,6 +888,8 @@ test('an Ignore row never hides a real booking made later in the same hours', as
 test('event day: ONE "event today" message to the people who open up, instead of reminders before each part', async () => {
   const s = setup({ at: '2026-10-17T05:00:00Z', settings: { facilities: FACILITIES }, regulars: PITCH_REGULARS });
   s.ticqet.set(SAT17, [{ id: 'ev', seats: [...hours(7, 10), ...hours(12, 24)] }]);
+  s.ticqet.set(SAT17, [{ id: 'lc', seats: ['8', '9'] }], PITCH_A);
+  s.ticqet.set(SAT17, [{ id: 'lcb', seats: ['8', '9'] }], PITCH_B);
   await s.engine.tick();
   for (const t of ['05:55', '06:00', '06:05', '06:45', '07:00', '07:45', '11:00', '11:45']) {
     s.clock.set(`2026-10-17T${t}:00Z`);
@@ -911,10 +948,57 @@ test('car-free day (a Schedule Changes row): the admin hears 3 days before, the 
 test('a car-free day row added late (the day before, after the morning update) still reaches the admin', async () => {
   const regulars = [{ client: 'LOCAL CHAMPIONS', facility: '5-a-side Pitch A', day: 'Sunday', start: '08:00', end: '10:00', type: 'Monthly', from: null, until: null }];
   const s = setup({ at: '2026-10-17T14:00:00Z', settings: { facilities: FACILITIES }, regulars });
+  s.ticqet.set(SUN18, [{ id: 'lc', seats: ['8', '9'] }], PITCH_A);
   await s.engine.tick();
   await s.engine.minuteTick();
   s.cfg.changes = cleanChanges([{ row: 5, date: '2026-10-18', reason: 'Car-free day' }], { regulars, facilities: FACILITIES });
   await s.engine.minuteTick();
   assert.equal(s.phone.kind('carfree').length, 1);
   assert.equal(s.phone.kind('schedule-change').length, 0, 'not ticked: not emailed');
+});
+
+// ---------- free slots, and a regular's open slot booked by someone ----------
+
+const FREE = '+250780000004';
+const FREE_CONTACTS = [...CONTACTS, { phone: FREE, alerts: false, summaries: false, reminders: false, admin: false, freeSlots: true }];
+
+test('free slots: each morning, the hours to offer clients - not booked, not a regular\'s, not during Umuganda', async () => {
+  const MON26 = 'Monday 26 October 2026';
+  const s = setup({ at: '2026-10-26T06:30:00Z', contacts: FREE_CONTACTS });
+  s.ticqet.set(MON26, [{ id: 'a', seats: ['10', '11'] }]);
+  s.ticqet.set('Tuesday 27 October 2026', [{ id: 'x', seats: ['20'] }]);
+  s.ticqet.set(SAT31, [{ id: 'ev', seats: hours(12, 24) }]);
+  await s.engine.tick();
+  await s.engine.minuteTick();
+  const free = s.phone.kind('free-slots');
+  assert.deepEqual(to(free), [FREE], 'only the people ticked for Free slots');
+  assert.equal(free[0].text, [
+    'ZARIA COURT: Free slots, Mon 26 Oct - Sun 1 Nov',
+    'Hours not booked on Ticqet and not a regular team\'s, between 8AM-11PM.',
+    'Multi-Purpose Court:',
+    'Today: 8-10AM, 12-11PM',
+    'Tue 27 Oct: 8AM-5PM, 7-8PM, 9-11PM', // MTN 5-7 PM is not offered, even though it is not on Ticqet
+    'Wed 28 Oct: 8AM-11PM',
+    'Thu 29 Oct: 8AM-11PM',
+    'Fri 30 Oct: 8AM-11PM',
+    'Sat 31 Oct: 11AM-12PM', // Umuganda until 11 AM, an event from 12 PM
+    'Sun 1 Nov: 8AM-11PM',
+    'As of 6:30 AM. Check Ticqet before you confirm a time: it may have been booked since.',
+  ].join('\n'));
+  s.clock.set('2026-10-26T07:30:00Z');
+  await s.engine.minuteTick();
+  assert.equal(s.phone.kind('free-slots').length, 1, 'once a day');
+});
+
+test('a regular slot the admin was told is open, then booked for exactly its hours: the admin checks it', async () => {
+  const { ticqet, phone, engine } = setup({ at: '2026-10-06T06:30:00Z' });
+  await engine.tick();
+  await engine.minuteTick();
+  assert.match(phone.kind('open-regular-slots')[0].text, /Tue 6 Oct: Multi-Purpose Court 5-7PM MTN/);
+  ticqet.add(TUE6, { id: 'who', seats: ['17', '18'] }); // later that morning
+  await engine.tick();
+  const check = phone.kind('regular-slot-check');
+  assert.deepEqual(to(check), [ADMIN]);
+  assert.match(check[0].text, /Ticqet booking in MTN's usual slot, Tue 6 Oct 5:00-7:00 PM \(2 hrs\)\.\nIf Zaria blocked it for MTN, ignore this\. If not, it may be double-booked\./);
+  assert.equal(phone.kind('new-booking').length, 0, 'not a team alert');
 });
