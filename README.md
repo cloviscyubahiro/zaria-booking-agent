@@ -49,6 +49,8 @@ If the sheet has a mistake (say, a mistyped email), the agent keeps using the la
 
 **Updating the script:** rebuild, open *Extensions > Apps Script*, replace all of `Code.gs` with the new file, save. Nothing else: the tabs, the timer and the agent's memory stay. At its next check the agent adds what an older sheet lacks (new tabs, columns and settings rows, the pitches' Ticqet IDs, the regular clients of a facility that has none yet) without touching what the team typed.
 
+**Timetable changes:** list them in `config/regular-fixes.json` (change a row's hours, remove a row, or add one; see the file for the format) and rebuild. After the paste, the agent makes each change on the Regular Clients tab once, only where the old values are still there, and lists what it did on the Status tab ("Last changes the agent made to this sheet").
+
 ### Schedule changes: car-free day, Umuganda, a team not coming, a booking made by mistake
 
 One row per change on the **Schedule Changes** tab:

@@ -8,6 +8,7 @@ config/settings.json
 config/regular-clients.json
 config/contacts.json
 config/schedule-changes.json
+config/regular-fixes.json
 
 # The built Google Apps Script file: pre-filled with staff names from config/.
 apps-script/dist/

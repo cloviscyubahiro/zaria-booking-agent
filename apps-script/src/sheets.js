@@ -481,6 +481,81 @@ export function prefillRegulars(ss, regulars, props, known = []) {
   return out;
 }
 
+// Timetable changes from the build, applied to the Regular Clients tab once
+// each (so a row the team edits afterwards is left alone):
+//   { id, change: {client, facility, day, start, end}, to: {start, end} }
+//   { id, remove: {client, facility, day, start, end} }
+//   { id, add: {client, facility, day, start, end, type, from, until} }
+// A change or removal only touches rows that still have exactly those values;
+// an addition is skipped if the client already has a row that day there.
+// Returns what was done, in words.
+export function applyRegularFixes(ss, fixes, props, known = []) {
+  const sh = ss.getSheetByName(TABS.regulars);
+  if (!sh || !fixes.length) return [];
+  const done = new Set(props.get('regularFixes', []));
+  const todo = fixes.filter((f) => f.id && !done.has(f.id));
+  if (!todo.length) return [];
+  const values = sh.getDataRange().getValues();
+  const hi = values.findIndex((r) => norm(r[0]) === 'client');
+  if (hi < 0) return [];
+  const head = values[hi].map(norm);
+  const c = Object.fromEntries(['client', 'facility', 'day', 'start', 'end', 'type', 'from', 'until'].map((k) => [k, head.indexOf(k)]));
+  if (['client', 'facility', 'day', 'start', 'end'].some((k) => c[k] < 0)) return [];
+  const tz = ss.getSpreadsheetTimeZone() || ZONE;
+  const hhmm = (v) => { // "17:00", "5:00 PM" or a time cell -> "17:00"
+    const s = String(cellValue(v, tz) ?? '').trim();
+    const m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([ap])?\.?m?\.?$/i);
+    if (!m) return s;
+    let h = Number(m[1]);
+    if (m[3]) h = (h % 12) + (/p/i.test(m[3]) ? 12 : 0);
+    return `${pad(h)}:${m[2]}`;
+  };
+  const fac = (v) => nameKey((resolveFacility(String(v ?? ''), known) || { name: String(v ?? '') }).name);
+  const rows = values.slice(hi + 1).map((r, i) => ({ r, row: hi + 2 + i }));
+  const same = (r, w) => nameKey(r[c.client]) === nameKey(w.client) && fac(r[c.facility]) === fac(w.facility)
+    && norm(r[c.day]) === norm(w.day) && hhmm(r[c.start]) === w.start && hhmm(r[c.end]) === w.end;
+  const label = (w) => `${w.client}, ${w.facility}, ${w.day}`;
+  const out = [];
+  const drop = [];
+  let next = Math.max(sh.getLastRow(), hi + 1) + 1;
+  for (const f of todo) {
+    done.add(f.id);
+    if (f.change) {
+      for (const { r, row } of rows.filter((x) => !drop.includes(x.row) && same(x.r, f.change))) {
+        sh.getRange(row, c.start + 1).setNumberFormat('@').setValue(f.to.start);
+        sh.getRange(row, c.end + 1).setNumberFormat('@').setValue(f.to.end);
+        r[c.start] = f.to.start;
+        r[c.end] = f.to.end;
+        out.push(`Regular Clients: ${label(f.change)} changed to ${f.to.start}-${f.to.end}`);
+      }
+    } else if (f.remove) {
+      for (const { row } of rows.filter((x) => !drop.includes(x.row) && same(x.r, f.remove))) {
+        drop.push(row);
+        out.push(`Regular Clients: removed ${label(f.remove)} ${f.remove.start}-${f.remove.end}`);
+      }
+    } else if (f.add) {
+      const a = f.add;
+      const has = rows.some((x) => !drop.includes(x.row) && nameKey(x.r[c.client]) === nameKey(a.client)
+        && fac(x.r[c.facility]) === fac(a.facility) && norm(x.r[c.day]) === norm(a.day));
+      if (has) continue;
+      const cells = [];
+      for (const [k, v] of Object.entries({ client: a.client, facility: a.facility, day: a.day, start: a.start, end: a.end, type: a.type || '', from: dmy(a.from), until: dmy(a.until) })) {
+        if (c[k] >= 0) cells.push([c[k] + 1, v]);
+      }
+      for (const [col, v] of cells) {
+        const cell = sh.getRange(next, col);
+        if (col === c.start + 1 || col === c.end + 1 || col === c.from + 1 || col === c.until + 1) cell.setNumberFormat('@');
+        cell.setValue(v);
+      }
+      next += 1;
+      out.push(`Regular Clients: added ${label(a)} ${a.start}-${a.end}`);
+    }
+  }
+  for (const row of drop.sort((a, b) => b - a)) sh.deleteRows(row, 1); // bottom up, so row numbers stay right
+  props.set('regularFixes', [...done]);
+  return out;
+}
+
 // Schedule Changes rows from the build (e.g. bookings to ignore) that are not on
 // the sheet yet: added once each, below the last row in use, so rows the team
 // deletes stay deleted. Rows for past dates are skipped. Also refreshes the
@@ -565,6 +640,7 @@ export function upgradeSheet(ss, { settings, prefill, props }) {
   step('Settings', () => upgradeSettings(ss, settings));
   step('Bookings Log', () => upgradeBookingsLog(ss, settings.court.name));
   step('Regular Clients', () => prefillRegulars(ss, prefill.regulars || [], props, known));
+  step('Regular Clients (timetable changes)', () => applyRegularFixes(ss, prefill.regularFixes || [], props, known));
   step('Schedule Changes', () => prefillChanges(ss, prefill.changes || [], props));
   step('drop-down lists', () => {
     const steps = new Set(props.get('sheetUpgrades', []));

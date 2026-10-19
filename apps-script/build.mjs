@@ -66,7 +66,9 @@ export function localDefaults(dir = path.join(root, 'config')) {
     date: c.date || '', facility: c.facility || '', client: c.client || '',
     newTime: c.newTime || '', reason: c.reason || '', email: !!c.email,
   }));
-  return { regulars, contacts, changes };
+  // Timetable changes the agent makes to the Regular Clients tab, once each.
+  const regularFixes = read('regular-fixes.json') || [];
+  return { regulars, contacts, changes, regularFixes };
 }
 
 const swapNodeModules = {

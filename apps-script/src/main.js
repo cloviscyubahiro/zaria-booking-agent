@@ -28,7 +28,7 @@ import { log, recent } from './logger.js';
 // Filled in at build time from the local config: regular clients, contact
 // names, roles and ticks (never phone numbers), and schedule changes. Used
 // only to pre-fill new tabs, and the rows of facilities that have none yet.
-const PREFILL = typeof __ZARIA_DEFAULTS__ !== 'undefined' ? __ZARIA_DEFAULTS__ : { regulars: [], contacts: [], changes: [] };
+const PREFILL = typeof __ZARIA_DEFAULTS__ !== 'undefined' ? __ZARIA_DEFAULTS__ : { regulars: [], contacts: [], changes: [], regularFixes: [] };
 
 // Here the agent runs every 5 minutes instead of continuously, so it alerts on
 // the first sighting of a change (no settle wait), lets reminders go out up to
@@ -108,6 +108,7 @@ function statusRows({ cfg, runtime, props, configErrors, warnings, failure, even
     : runtime.lastContactAt ? `OK - last read ${sheets.kigaliStamp(runtime.lastContactAt)}` : 'Not read yet';
   const errorsThisRun = recent.filter((r) => r.level === 'ERROR').map((r) => r.text);
   const upcoming = (cfg ? cfg.changes || [] : []).filter((c) => !c.problem && c.date >= day);
+  const updated = props.get('sheetUpdated', null);
   return [
     ['Last check', sheets.kigaliStamp(new Date())],
     ['Ticqet', ticqet],
@@ -120,6 +121,7 @@ function statusRows({ cfg, runtime, props, configErrors, warnings, failure, even
     ['Mistakes in the sheet', configErrors.length ? configErrors.join('\n') : 'None'],
     ['Things to check', warnings.length ? warnings.join('\n') : 'None'],
     ['Errors in the last check', failure ? failure.message : errorsThisRun.length ? errorsThisRun.join('\n') : 'None'],
+    ['Last changes the agent made to this sheet', updated ? `${sheets.kigaliStamp(updated.at)}:\n${updated.done.join('\n')}` : 'None'],
   ];
 }
 
@@ -147,6 +149,7 @@ export async function runAgent() {
     // rows, the pitches' Ticqet IDs) before they are read.
     const upgrade = sheets.upgradeSheet(ss, { settings: lastGoodSettings(props), prefill: PREFILL, props });
     for (const done of upgrade.done) log.info(`[setup] ${done}`);
+    if (upgrade.done.length) props.set('sheetUpdated', { at: Date.now(), done: upgrade.done });
     for (const problem of upgrade.failed) log.error(`[setup] could not update the sheet (${problem}) - the agent carries on`);
     ({ cfg, errors: configErrors, warnings } = loadConfig(ss, props));
     const sender = makeSender(cfg, previewItems);

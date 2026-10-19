@@ -706,3 +706,48 @@ test('the test email goes to the admin and to whoever runs it', async () => {
   assert.equal(g.sent[0].subject, 'Test message');
   assert.match(g.ss.toasts.at(-1), /clovis@gmail.com: sent/);
 });
+
+// Timetable changes the build carries (config/regular-fixes.json), as for the
+// timetable of 15 Oct 2026.
+const FIXES = [
+  { id: 'mtn-tue', change: { client: 'MTN', facility: 'Multi-Purpose Court', day: 'Tuesday', start: '17:00', end: '19:00' }, to: { start: '19:00', end: '21:00' } },
+  { id: 'mtn-thu', change: { client: 'MTN', facility: 'Multi-Purpose Court', day: 'Thursday', start: '17:00', end: '19:00' }, to: { start: '19:00', end: '21:00' } },
+  { id: 'horizon', remove: { client: 'Horizon', facility: 'Multi-Purpose Court', day: 'Friday', start: '15:00', end: '17:00' } },
+  { id: 'invincible', add: { client: 'Invincible', facility: '5-a-side Pitch A', day: 'Wednesday', start: '20:00', end: '22:00', type: 'Monthly', from: '2026-10-09', until: '2026-10-31' } },
+  { id: 'lc', add: { client: 'Local Champions', facility: '5-a-side Pitch A', day: 'Saturday', start: '08:00', end: '10:00', type: 'Monthly', from: '2026-10-09', until: '2026-10-31' } },
+];
+const codeWithFixes = await buildAppsScript({ defaults: { ...DEFAULTS, regularFixes: FIXES }, write: false });
+
+test('timetable changes from the build are made on the Regular Clients tab once, only where the old values are still there', async () => {
+  const g = makeGoogle('2026-10-19T08:00:00Z');
+  const sh = g.ss.insertSheet('Regular Clients');
+  sh.cells = [
+    ['Regular clients (booked directly with Zaria)'], ['Their hours are never announced as new bookings.'], [],
+    ['Client', 'Facility', 'Day', 'Start', 'End', 'Type', 'From', 'Until'],
+    ['MTN', 'Multi-Purpose Court', 'Tuesday', '17:00', '19:00', 'Monthly', '', ''],
+    ['Horizon', 'multi purpose court', 'Friday', '15:00', '17:00', 'Monthly', '', ''],
+    ['MTN', 'Multi-Purpose Court', 'Thursday', '5:00 PM', '7:00 PM', 'Monthly', '', ''],
+    ['Oxygen 250', 'Multi-Purpose Court', 'Friday', '19:00', '21:00', 'Monthly', '', ''],
+  ];
+  vm.runInContext(codeWithFixes, g.context);
+  await g.run('setup');
+  await g.run('runAgent');
+  const rows = () => sh.rows().slice(4).filter((r) => r[0]).map((r) => r.slice(0, 5).concat(r.slice(6, 8)).join(' | '));
+  assert.deepEqual(rows(), [
+    'MTN | Multi-Purpose Court | Tuesday | 19:00 | 21:00 |  | ',
+    'MTN | Multi-Purpose Court | Thursday | 19:00 | 21:00 |  | ',
+    'Oxygen 250 | Multi-Purpose Court | Friday | 19:00 | 21:00 |  | ',
+    'LOCAL CHAMPIONS | 5-a-side Pitch A | Saturday | 08:00 | 10:00 | 09/10/2026 | 31/10/2026',
+    'LOCAL CHAMPIONS | 5-a-side Pitch B | Saturday | 08:00 | 10:00 | 09/10/2026 | 31/10/2026',
+    'Invincible | 5-a-side Pitch A | Wednesday | 20:00 | 22:00 | 09/10/2026 | 31/10/2026',
+  ], 'MTN moved, Horizon removed, Invincible added; Local Champions was already there');
+  const status = g.status();
+  assert.equal(status['Mistakes in the sheet'], 'None');
+  assert.match(status['Last changes the agent made to this sheet'], /Regular Clients: MTN, Multi-Purpose Court, Tuesday changed to 19:00-21:00\nRegular Clients: MTN, Multi-Purpose Court, Thursday changed to 19:00-21:00\nRegular Clients: removed Horizon, Multi-Purpose Court, Friday 15:00-17:00\nRegular Clients: added Invincible, 5-a-side Pitch A, Wednesday 20:00-22:00/);
+
+  // Done once: the team's own later edits are left alone.
+  sh.cells.push(['Horizon', 'Multi-Purpose Court', 'Friday', '15:00', '17:00', 'Monthly', '', '']);
+  g.at('2026-10-19T08:05:00Z');
+  await g.run('runAgent');
+  assert.ok(rows().some((r) => r.startsWith('Horizon')), 'not removed a second time');
+});
